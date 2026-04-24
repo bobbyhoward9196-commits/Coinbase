@@ -53,15 +53,10 @@ Real customer: Sanford Burstein (since Nov 2017) with full 7-year service/paymen
 - Seeded Sanford with 2 devices (Dell OptiPlex, Lenovo ThinkPad) + 1 approved QuickBooks request
 - ✅ Backend test: 29/29 passed
 
-### Iteration 3 — 2FA / OTP Login (Apr 2026)
-- **Resend integration** (API key in `/app/backend/.env` as `RESEND_API_KEY`)
-- **2FA/OTP required for CUSTOMER role only** — admin/tech log in directly
-- New endpoints: `POST /api/auth/verify-otp`, `POST /api/auth/resend-otp` (20s throttle)
-- `auth_otps` collection stores bcrypt-hashed 6-digit codes with 5-min TTL, 5-attempt lockout, consumed-on-verify
-- Frontend: 2-step Login UI — email/password → branded 6-digit OTP entry screen with auto-advance, paste support, resend cooldown, and "Back to sign in"
-- Branded HTML email template via Resend (custom domain verification still needed for real delivery)
-- In test mode, OTP is logged to backend stderr as `DEV OTP for <email>: NNNNNN`
-- ✅ Backend tests: 15/15 | Frontend tests: 6/6
+### Iteration 3 — 2FA / OTP Login (Apr 2026) — REVERTED per user request
+- Feature was built, tested (15/15 backend, 6/6 frontend), and deployed with verified Resend domain.
+- User opted to remove it — customer login is back to direct JWT (same as admin/tech).
+- Resend integration & auth_otps collection removed. Login works with a single `{email, password, role?}` call.
 
 ## Backlog / Not yet
 - P1: File upload for technician reports (object storage)

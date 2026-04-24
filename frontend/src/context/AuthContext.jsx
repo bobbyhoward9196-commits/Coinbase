@@ -24,25 +24,10 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password, role) => {
     const { data } = await api.post('/auth/login', { email, password, role });
-    // If OTP required (customer flow), do not set session yet — return the challenge
-    if (data.otp_required) return { otp_required: true, email: data.email, masked_email: data.masked_email, message: data.message };
     localStorage.setItem('gts_token', data.token);
     localStorage.setItem('gts_user', JSON.stringify(data.user));
     setUser(data.user);
     return data.user;
-  };
-
-  const verifyOtp = async (email, otp) => {
-    const { data } = await api.post('/auth/verify-otp', { email, otp });
-    localStorage.setItem('gts_token', data.token);
-    localStorage.setItem('gts_user', JSON.stringify(data.user));
-    setUser(data.user);
-    return data.user;
-  };
-
-  const resendOtp = async (email) => {
-    const { data } = await api.post('/auth/resend-otp', { email });
-    return data;
   };
 
   const register = async (payload) => {
@@ -67,7 +52,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, verifyOtp, resendOtp, register, logout, refresh, setUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, refresh, setUser }}>
       {children}
     </AuthContext.Provider>
   );
