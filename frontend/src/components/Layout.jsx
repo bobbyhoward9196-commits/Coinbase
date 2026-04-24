@@ -16,6 +16,7 @@ const publicLinks = [
   { to: '/about', label: 'About' },
   { to: '/services', label: 'Services' },
   { to: '/pricing', label: 'Pricing' },
+  { to: '/scan', label: 'Security Scan' },
   { to: '/book', label: 'Book Service' },
   { to: '/support', label: 'Support' },
   { to: '/contact', label: 'Contact' },

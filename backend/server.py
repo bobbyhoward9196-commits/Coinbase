@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -6,9 +6,13 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import BaseModel, Field, EmailStr, ConfigDict, HttpUrl
 from typing import List, Optional, Literal
 import uuid
+import re
+import socket
+import ssl
+from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -787,6 +791,178 @@ async def delete_device(did: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
     await db.devices.delete_one({"id": did})
     return {"ok": True}
+
+# ----------------------- SECURITY SCAN (Pre-Flight URL check) -----------------------
+# Known legitimate domains to check typosquatting against
+_TARGET_DOMAINS = [
+    # Banking
+    "chase.com", "bankofamerica.com", "wellsfargo.com", "citi.com", "capitalone.com",
+    "usbank.com", "americanexpress.com", "discover.com", "tdbank.com", "pnc.com",
+    "barclays.com", "hsbc.com", "santander.com", "rbc.com", "bmo.com",
+    # Payments
+    "paypal.com", "venmo.com", "cashapp.com", "zelle.com", "stripe.com", "wise.com",
+    # Crypto exchanges / wallets
+    "coinbase.com", "binance.com", "kraken.com", "gemini.com", "crypto.com",
+    "metamask.io", "ledger.com", "trezor.io", "blockchain.com", "exodus.com",
+    "uniswap.org", "kucoin.com", "bitstamp.net", "bittrex.com",
+    # Brokerages
+    "fidelity.com", "schwab.com", "vanguard.com", "robinhood.com", "etrade.com",
+    "tdameritrade.com", "merrilledge.com", "interactivebrokers.com",
+    # Tax / accounting
+    "turbotax.intuit.com", "hrblock.com", "quickbooks.intuit.com", "irs.gov",
+]
+_SUSPICIOUS_TLDS = {"tk", "ml", "ga", "cf", "gq", "top", "click", "zip", "mov", "xyz", "country"}
+_URL_SHORTENERS = {"bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly", "is.gd", "buff.ly", "adf.ly", "shorte.st"}
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a: return len(b)
+    if not b: return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(cur[j-1] + 1, prev[j] + 1, prev[j-1] + (ca != cb))
+        prev = cur
+    return prev[-1]
+
+class ScanUrlInput(BaseModel):
+    url: str
+
+@api.post("/scan/url")
+async def scan_url(body: ScanUrlInput):
+    raw = body.url.strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="URL is required")
+    if not raw.lower().startswith(("http://", "https://")):
+        raw = "https://" + raw
+    try:
+        p = urlparse(raw)
+        host = (p.hostname or "").lower()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not parse URL")
+
+    checks = []  # list of {id, label, status, detail}
+    def add(cid, label, status, detail):
+        checks.append({"id": cid, "label": label, "status": status, "detail": detail})
+
+    # 1) HTTPS check
+    if p.scheme == "https":
+        add("https", "HTTPS encryption", "pass", "Site uses HTTPS — traffic is encrypted.")
+    else:
+        add("https", "HTTPS encryption", "fail", "Site uses plain HTTP. NEVER enter financial credentials on HTTP pages.")
+
+    # 2) Raw IP address
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host or ""):
+        add("ip", "Domain vs IP", "fail", "URL uses a raw IP address instead of a domain — extremely suspicious.")
+    else:
+        add("ip", "Domain vs IP", "pass", "URL uses a proper domain name.")
+
+    # 3) Punycode / IDN homograph
+    if host and "xn--" in host:
+        add("punycode", "Internationalized / punycode domain", "warn", "Domain uses punycode. Attackers hide lookalike Cyrillic/Greek characters this way. Verify manually.")
+    else:
+        add("punycode", "Internationalized / punycode domain", "pass", "No punycode detected.")
+
+    # 4) @ in URL
+    if "@" in raw.split("://", 1)[-1]:
+        add("atsign", "@ symbol in URL", "fail", "URL contains '@' — classic phishing trick used to hide the real destination.")
+    else:
+        add("atsign", "@ symbol in URL", "pass", "No @ character in URL.")
+
+    # 5) Number of subdomains / length
+    parts = host.split(".") if host else []
+    if len(parts) >= 5:
+        add("subdomains", "Subdomain depth", "warn", f"{len(parts) - 2} subdomains nested — unusually deep. Double-check this is the real site.")
+    else:
+        add("subdomains", "Subdomain depth", "pass", "Normal domain structure.")
+
+    # 6) Suspicious TLD
+    tld = parts[-1] if parts else ""
+    if tld in _SUSPICIOUS_TLDS:
+        add("tld", "Top-level domain", "warn", f".{tld} is commonly abused for free, short-lived phishing domains.")
+    else:
+        add("tld", "Top-level domain", "pass", f".{tld} is a common, trusted TLD.")
+
+    # 7) URL shortener
+    base = ".".join(parts[-2:]) if len(parts) >= 2 else host
+    if base in _URL_SHORTENERS:
+        add("shortener", "URL shortener", "warn", "URL is a shortener — expand it before trusting. Hover before clicking.")
+    else:
+        add("shortener", "URL shortener", "pass", "Not a known URL shortener.")
+
+    # 8) Length
+    if len(raw) > 120:
+        add("length", "URL length", "warn", f"URL is {len(raw)} chars long — suspicious. Phishing URLs often hide payloads in long query strings.")
+    else:
+        add("length", "URL length", "pass", "URL length is normal.")
+
+    # 9) Typosquat check
+    typo_hits = []
+    if base:
+        for target in _TARGET_DOMAINS:
+            d = _levenshtein(base, target)
+            if 0 < d <= 2:
+                typo_hits.append((target, d))
+    if typo_hits:
+        best = sorted(typo_hits, key=lambda x: x[1])[0]
+        add("typosquat", "Lookalike domain detection", "fail",
+            f"Domain '{base}' is {best[1]} character(s) away from '{best[0]}' — this is a strong typosquatting signal. DO NOT enter credentials.")
+    else:
+        add("typosquat", "Lookalike domain detection", "pass", "No typosquatting against common banks / exchanges detected.")
+
+    # 10) SSL cert verification (attempt connect)
+    ssl_ok = None
+    cert_days_left = None
+    if p.scheme == "https" and host and not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+        try:
+            ctx = ssl.create_default_context()
+            with socket.create_connection((host, p.port or 443), timeout=4) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                    cert = ssock.getpeercert()
+                    exp = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+                    cert_days_left = (exp - datetime.now(timezone.utc)).days
+                    ssl_ok = True
+        except Exception as e:
+            ssl_ok = False
+            add("ssl", "TLS certificate", "warn", f"Could not validate TLS certificate ({str(e)[:60]}). Might be a self-signed or expired cert.")
+        if ssl_ok:
+            if cert_days_left is not None and cert_days_left < 14:
+                add("ssl", "TLS certificate", "warn", f"TLS cert expires in {cert_days_left} days — legitimate sites renew well in advance.")
+            else:
+                add("ssl", "TLS certificate", "pass", f"Valid TLS certificate ({cert_days_left} days remaining).")
+
+    # Summary
+    fails = sum(1 for c in checks if c["status"] == "fail")
+    warns = sum(1 for c in checks if c["status"] == "warn")
+    verdict = "safe"
+    if fails >= 1:
+        verdict = "danger"
+    elif warns >= 2:
+        verdict = "caution"
+    elif warns == 1:
+        verdict = "caution"
+
+    return {
+        "url": raw,
+        "host": host,
+        "checks": checks,
+        "summary": {
+            "pass": sum(1 for c in checks if c["status"] == "pass"),
+            "warn": warns,
+            "fail": fails,
+        },
+        "verdict": verdict,
+        "scanned_at": now_iso(),
+    }
+
+@api.get("/scan/ip")
+async def scan_ip(request: Request):
+    # Return the caller's public IP (from X-Forwarded-For via ingress) for the UI
+    xff = request.headers.get("x-forwarded-for", "")
+    ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "unknown")
+    return {"ip": ip}
 
 # ----------------------- STARTUP: SEED DATA -----------------------
 async def seed_if_empty():

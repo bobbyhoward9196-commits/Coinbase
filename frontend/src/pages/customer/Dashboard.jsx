@@ -25,6 +25,9 @@ import {
 import { toast } from 'sonner';
 import Software from './Software';
 import Devices from './Devices';
+import ScanEmbed from '../Scan';
+
+const ScanRoute = () => <ScanEmbed embedded />;
 
 const StatCard = ({ icon: Icon, label, value, hint, tint = 'blue' }) => {
   const tints = {
@@ -537,6 +540,7 @@ export default function CustomerDashboard() {
         <Route path="appointments" element={<Appointments />} />
         <Route path="software" element={<Software />} />
         <Route path="devices" element={<Devices />} />
+        <Route path="scan" element={<ScanRoute />} />
         <Route path="invoices" element={<Invoices />} />
         <Route path="history" element={<History />} />
         <Route path="tickets" element={<Tickets />} />

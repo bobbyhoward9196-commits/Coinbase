@@ -15,6 +15,7 @@ import Support from './pages/Support';
 import Contact from './pages/Contact';
 import Privacy from './pages/Privacy';
 import Terms from './pages/Terms';
+import Scan from './pages/Scan';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import CustomerDashboard from './pages/customer/Dashboard';
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/contact" element={<Public><Contact /></Public>} />
           <Route path="/privacy" element={<Public><Privacy /></Public>} />
           <Route path="/terms" element={<Public><Terms /></Public>} />
+          <Route path="/scan" element={<Public><Scan /></Public>} />
           <Route path="/login" element={<Public><Login /></Public>} />
           <Route path="/register" element={<Public><Register /></Public>} />
 

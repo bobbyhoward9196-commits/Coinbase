@@ -5,7 +5,7 @@ import { Button } from './ui/button';
 import {
   LayoutDashboard, LogOut, Menu, X, Calendar, FileText, MessageSquare,
   Settings, Users, Wrench, BarChart3, TicketCheck, UserCog, ClipboardList,
-  CreditCard, DollarSign, BookOpen, Package, Sparkles, Monitor
+  CreditCard, DollarSign, BookOpen, Package, Sparkles, Monitor, ShieldCheck
 } from 'lucide-react';
 
 const customerLinks = [
@@ -13,6 +13,7 @@ const customerLinks = [
   { to: '/dashboard/appointments', label: 'Appointments', icon: Calendar },
   { to: '/dashboard/software', label: 'Software & Apps', icon: Sparkles },
   { to: '/dashboard/devices', label: 'My Devices', icon: Monitor },
+  { to: '/dashboard/scan', label: 'Security Scan', icon: ShieldCheck },
   { to: '/dashboard/invoices', label: 'Invoices & Payments', icon: FileText },
   { to: '/dashboard/history', label: 'Service History', icon: ClipboardList },
   { to: '/dashboard/tickets', label: 'Support Tickets', icon: TicketCheck },
