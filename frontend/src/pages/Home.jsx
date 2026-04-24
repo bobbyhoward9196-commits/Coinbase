@@ -190,53 +190,79 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Crypto highlight */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-[#0B3B82] text-white" data-testid="crypto-section">
+      {/* Premium VIP access highlight */}
+      <section className="relative overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-[#0B3B82] text-white" data-testid="vip-access-section">
         <div className="absolute inset-0 gts-grid-pattern opacity-20" />
         <div className="absolute -top-20 -right-20 h-[420px] w-[420px] rounded-full bg-amber-500/10 blur-3xl" />
-        <div className="absolute -bottom-20 -left-20 h-[420px] w-[420px] rounded-full bg-blue-500/15 blur-3xl" />
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-20 md:py-24">
           <div className="flex flex-col items-start">
             <Badge className="bg-amber-500/15 text-amber-300 border border-amber-400/30 hover:bg-amber-500/20 mb-5">
-              <Bitcoin className="h-3.5 w-3.5 mr-1.5" /> Crypto Security · VIP Benefit
+              <Award className="h-3.5 w-3.5 mr-1.5" /> VIP Direct Access
             </Badge>
             <h2 className="font-display font-extrabold text-3xl sm:text-4xl lg:text-5xl text-balance leading-tight max-w-3xl">
-              The only tech support line trusted by <span className="bg-gradient-to-r from-amber-300 to-yellow-500 bg-clip-text text-transparent">serious crypto holders</span>.
+              Two benefits you won’t find <span className="bg-gradient-to-r from-amber-300 to-yellow-500 bg-clip-text text-transparent">anywhere else</span>.
             </h2>
             <p className="mt-5 text-lg text-slate-300 max-w-2xl leading-relaxed">
-              Wallets, seed phrases, hardware keys, exchange account recovery — we've been protecting our customers' digital assets since well before it was cool.
-              Our <strong className="text-white">Lifetime VIP</strong> plan includes a direct line to a certified crypto security expert.
+              Included with our <strong className="text-white">Lifetime VIP</strong> plan — two things our long-term customers count on the most.
             </p>
           </div>
 
-          <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              { icon: ShieldCheck, t: 'Crypto Wallet Protection', d: 'Hardware wallet setup, seed-phrase vaulting, MFA, isolated device hardening for MetaMask, Ledger, Trezor.' },
-              { icon: LockIcon, t: 'Crypto Insurance Coverage', d: 'Protection against wallet compromise, phishing, and SIM-swap theft — up to $100K/incident for VIP clients.' },
-              { icon: UserCheck, t: 'Crypto Expert Direct Access', d: 'Priority line to a certified crypto security expert, 24/7, for audits and real-time guidance.' },
-              { icon: Search, t: 'Recovery & Forensics', d: 'Forensic tracing, exchange communication, and structured recovery for stolen or mis-sent crypto.' },
-            ].map((c, i) => (
-              <Card key={i} className="bg-white/5 border-white/10 backdrop-blur-lg gts-card-hover overflow-hidden" data-testid={`crypto-card-${i}`}>
-                <CardContent className="p-6">
-                  <div className="h-11 w-11 rounded-lg bg-amber-400/20 border border-amber-400/30 grid place-items-center mb-4">
-                    <c.icon className="h-5 w-5 text-amber-300" />
-                  </div>
-                  <h3 className="font-display font-semibold text-white">{c.t}</h3>
-                  <p className="mt-2 text-sm text-slate-300 leading-relaxed">{c.d}</p>
-                </CardContent>
-              </Card>
-            ))}
+          <div className="mt-12 grid gap-6 md:grid-cols-2">
+            <Card className="bg-white/5 border-white/10 backdrop-blur-lg gts-card-hover overflow-hidden" data-testid="vip-card-crypto">
+              <CardContent className="p-8">
+                <div className="h-14 w-14 rounded-xl bg-amber-400/20 border border-amber-400/30 grid place-items-center mb-5">
+                  <ShieldCheck className="h-7 w-7 text-amber-300" />
+                </div>
+                <h3 className="font-display font-bold text-2xl text-white">Crypto Protection</h3>
+                <p className="mt-3 text-slate-300 leading-relaxed">
+                  Hardware-wallet setup, seed-phrase vaulting, SIM-swap protection, phishing defense, and quarterly wallet security audits.
+                  Works with MetaMask, Ledger, Trezor, Coinbase, Kraken, and all major wallets and exchanges.
+                </p>
+                <ul className="mt-5 space-y-2 text-sm text-slate-300">
+                  {[
+                    'Hardware wallet setup & seed backup',
+                    'Anti-phishing & SIM-swap hardening',
+                    'Quarterly wallet security audits',
+                    'NDA available on request',
+                  ].map((f, i) => (
+                    <li key={i} className="flex gap-2 items-start"><CheckCircle2 className="h-4 w-4 text-amber-300 mt-0.5 flex-shrink-0" /> {f}</li>
+                  ))}
+                </ul>
+                <Button asChild className="mt-6 bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold" data-testid="vip-crypto-cta">
+                  <Link to="/book?service=crypto-protection">Book a crypto audit <ArrowRight className="ml-2 h-4 w-4" /></Link>
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white/5 border-white/10 backdrop-blur-lg gts-card-hover overflow-hidden" data-testid="vip-card-sec">
+              <CardContent className="p-8">
+                <div className="h-14 w-14 rounded-xl bg-amber-400/20 border border-amber-400/30 grid place-items-center mb-5">
+                  <UserCheck className="h-7 w-7 text-amber-300" />
+                </div>
+                <h3 className="font-display font-bold text-2xl text-white">SEC-Approved Advisor Direct Access</h3>
+                <p className="mt-3 text-slate-300 leading-relaxed">
+                  A direct line to an SEC-registered investment advisor whenever a tech-support question crosses over into an investment, custody, or tax question — no appointment required for VIP clients.
+                </p>
+                <ul className="mt-5 space-y-2 text-sm text-slate-300">
+                  {[
+                    'Direct line to a registered SEC-approved advisor',
+                    'Investment, custody & tax-adjacent questions',
+                    'No appointment needed for VIP clients',
+                    'Confidential, independent guidance',
+                  ].map((f, i) => (
+                    <li key={i} className="flex gap-2 items-start"><CheckCircle2 className="h-4 w-4 text-amber-300 mt-0.5 flex-shrink-0" /> {f}</li>
+                  ))}
+                </ul>
+                <Button asChild className="mt-6 bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold" data-testid="vip-sec-cta">
+                  <Link to="/contact">Request advisor access <ArrowRight className="ml-2 h-4 w-4" /></Link>
+                </Button>
+              </CardContent>
+            </Card>
           </div>
 
-          <div className="mt-10 flex flex-wrap items-center gap-4">
-            <Button asChild size="lg" className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold" data-testid="crypto-vip-cta">
-              <Link to="/pricing#lifetime-vip">Explore VIP Crypto Plan <ArrowRight className="ml-2 h-4 w-4" /></Link>
-            </Button>
-            <Button asChild size="lg" variant="outline" className="border-white/30 bg-white/5 text-white hover:bg-white/10">
-              <Link to="/book?service=crypto-protection">Book a crypto audit</Link>
-            </Button>
-            <p className="text-xs text-slate-400 ml-2">NDA available on request · all sessions encrypted</p>
-          </div>
+          <p className="mt-8 text-xs text-slate-400 max-w-3xl">
+            SEC-approved advisor access is provided through our independent licensed partner. Global Tech Solutions is an independent technical support provider and is not itself a registered investment advisor. See our <Link to="/terms" className="underline">Terms</Link> for details.
+          </p>
         </div>
       </section>
 
