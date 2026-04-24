@@ -1157,7 +1157,7 @@ async def seed_if_empty():
         {"id": str(uuid.uuid4()), "name": "Business", "price": 299, "duration": "per month", "description": "Managed IT for small and mid-sized businesses.", "popular": False,
          "features": ["Up to 15 endpoints", "Managed firewall & SonicWall", "24/7 emergency response", "Cloud backup (500GB)", "Quarterly on-site visits", "Dedicated account manager"]},
         {"id": str(uuid.uuid4()), "name": "Lifetime VIP", "price": 6400, "duration": "one-time", "description": "White-glove lifetime coverage — 10 devices transferable.", "popular": False,
-         "features": ["10 devices (transferable)", "Dedicated technician", "Crypto protection & wallet audits", "Direct line to crypto security expert", "Unlimited remote & on-site", "Lifetime coverage, no renewals"]},
+         "features": ["10 devices (transferable)", "Dedicated technician", "🛡️ Crypto Protection & wallet audits", "👤 SEC-approved advisor direct access", "Unlimited remote & on-site", "Lifetime coverage, no renewals"]},
     ]
     for p in plans:
         await db.plans.insert_one(p.copy())
