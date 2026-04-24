@@ -1,0 +1,849 @@
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Query
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+import logging
+from pathlib import Path
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from typing import List, Optional, Literal
+import uuid
+from datetime import datetime, timezone, timedelta
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+
+JWT_SECRET = os.environ.get('JWT_SECRET', 'gts-super-secret-key-change-in-prod-2026')
+JWT_ALGORITHM = 'HS256'
+JWT_EXP_HOURS = 24 * 7
+
+pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer(auto_error=False)
+
+app = FastAPI(title="Global Tech Solutions API")
+api = APIRouter(prefix="/api")
+
+# ----------------------- Utilities -----------------------
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+def hash_password(p: str) -> str:
+    return pwd_ctx.hash(p)
+
+def verify_password(p: str, h: str) -> bool:
+    try:
+        return pwd_ctx.verify(p, h)
+    except Exception:
+        return False
+
+def create_token(user_id: str, role: str, email: str) -> str:
+    payload = {
+        "sub": user_id,
+        "role": role,
+        "email": email,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXP_HOURS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+async def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    if not creds:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password": 0})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        return user
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def require_role(*roles):
+    async def checker(user=Depends(get_current_user)):
+        if user["role"] not in roles:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return user
+    return checker
+
+# ----------------------- Models -----------------------
+class RegisterInput(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    phone: Optional[str] = None
+    address: Optional[str] = None
+
+class LoginInput(BaseModel):
+    email: EmailStr
+    password: str
+    role: Optional[str] = None  # customer / technician / admin (optional hint)
+
+class ContactForm(BaseModel):
+    name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    subject: str
+    message: str
+
+class BookingInput(BaseModel):
+    service_type: str
+    device_type: Optional[str] = None
+    description: str
+    preferred_date: Optional[str] = None
+    preferred_time: Optional[str] = None
+    urgency: Optional[str] = "normal"  # normal / urgent / emergency
+    contact_name: Optional[str] = None
+    contact_email: Optional[EmailStr] = None
+    contact_phone: Optional[str] = None
+    address: Optional[str] = None
+
+class TicketInput(BaseModel):
+    subject: str
+    description: str
+    priority: Optional[str] = "medium"
+    category: Optional[str] = "general"
+
+class MessageInput(BaseModel):
+    recipient_id: str
+    content: str
+
+class UpdateAppointmentInput(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    report: Optional[str] = None
+
+class InvoiceInput(BaseModel):
+    customer_id: str
+    amount: float
+    description: str
+    items: Optional[List[dict]] = []
+    due_date: Optional[str] = None
+    payment_method: Optional[str] = None
+    status: Optional[str] = "pending"
+
+class AssignTechInput(BaseModel):
+    customer_id: str
+    technician_id: str
+
+class PlanInput(BaseModel):
+    name: str
+    price: float
+    duration: str
+    features: List[str]
+    description: Optional[str] = ""
+    popular: Optional[bool] = False
+
+class UpdateProfileInput(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    payment_method: Optional[str] = None
+
+# ----------------------- AUTH -----------------------
+@api.post("/auth/register")
+async def register(body: RegisterInput):
+    existing = await db.users.find_one({"email": body.email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user = {
+        "id": str(uuid.uuid4()),
+        "name": body.name,
+        "email": body.email.lower(),
+        "password": hash_password(body.password),
+        "role": "customer",
+        "phone": body.phone,
+        "address": body.address,
+        "created_at": now_iso(),
+        "active_plan": None,
+        "assigned_technician_id": None,
+        "payment_method": None,
+        "photo": None,
+    }
+    await db.users.insert_one(user)
+    token = create_token(user["id"], user["role"], user["email"])
+    user.pop("password")
+    user.pop("_id", None)
+    return {"token": token, "user": user}
+
+@api.post("/auth/login")
+async def login(body: LoginInput):
+    user = await db.users.find_one({"email": body.email.lower()})
+    if not user or not verify_password(body.password, user["password"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if body.role and user["role"] != body.role:
+        raise HTTPException(status_code=403, detail=f"This account is not a {body.role} account")
+    token = create_token(user["id"], user["role"], user["email"])
+    user.pop("password", None)
+    user.pop("_id", None)
+    return {"token": token, "user": user}
+
+@api.get("/auth/me")
+async def me(user=Depends(get_current_user)):
+    return user
+
+@api.patch("/auth/profile")
+async def update_profile(body: UpdateProfileInput, user=Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await db.users.update_one({"id": user["id"]}, {"$set": updates})
+    updated = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password": 0})
+    return updated
+
+# ----------------------- PLANS -----------------------
+@api.get("/plans")
+async def list_plans():
+    plans = await db.plans.find({}, {"_id": 0}).to_list(100)
+    return plans
+
+@api.post("/plans")
+async def create_plan(body: PlanInput, admin=Depends(require_role("admin"))):
+    plan = {"id": str(uuid.uuid4()), **body.model_dump(), "created_at": now_iso()}
+    await db.plans.insert_one(plan.copy())
+    plan.pop("_id", None)
+    return plan
+
+@api.patch("/plans/{plan_id}")
+async def update_plan(plan_id: str, body: PlanInput, admin=Depends(require_role("admin"))):
+    await db.plans.update_one({"id": plan_id}, {"$set": body.model_dump()})
+    return await db.plans.find_one({"id": plan_id}, {"_id": 0})
+
+@api.delete("/plans/{plan_id}")
+async def delete_plan(plan_id: str, admin=Depends(require_role("admin"))):
+    await db.plans.delete_one({"id": plan_id})
+    return {"ok": True}
+
+# ----------------------- SERVICES (static catalog) -----------------------
+@api.get("/services")
+async def list_services():
+    services = await db.services.find({}, {"_id": 0}).to_list(100)
+    return services
+
+# ----------------------- CONTACT / BOOKING (public) -----------------------
+@api.post("/contact")
+async def submit_contact(body: ContactForm):
+    doc = {"id": str(uuid.uuid4()), **body.model_dump(), "created_at": now_iso(), "status": "new"}
+    await db.contact_submissions.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return {"ok": True, "id": doc["id"]}
+
+@api.get("/contact", dependencies=[Depends(require_role("admin"))])
+async def list_contact():
+    return await db.contact_submissions.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+@api.post("/bookings")
+async def create_booking(body: BookingInput, user=Depends(get_current_user) if False else None):
+    # Public booking (if user attaches token via /bookings/me it's handled separately)
+    doc = {
+        "id": str(uuid.uuid4()),
+        **body.model_dump(),
+        "created_at": now_iso(),
+        "status": "pending",
+        "customer_id": None,
+        "technician_id": None,
+    }
+    await db.bookings.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return doc
+
+@api.post("/bookings/me")
+async def create_booking_auth(body: BookingInput, user=Depends(get_current_user)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        **body.model_dump(),
+        "created_at": now_iso(),
+        "status": "pending",
+        "customer_id": user["id"],
+        "technician_id": user.get("assigned_technician_id"),
+    }
+    # Also create an appointment
+    appt = {
+        "id": str(uuid.uuid4()),
+        "customer_id": user["id"],
+        "technician_id": user.get("assigned_technician_id"),
+        "service_type": body.service_type,
+        "description": body.description,
+        "scheduled_date": body.preferred_date or now_iso(),
+        "scheduled_time": body.preferred_time or "10:00",
+        "status": "scheduled",
+        "notes": "",
+        "urgency": body.urgency,
+        "created_at": now_iso(),
+    }
+    await db.bookings.insert_one(doc.copy())
+    await db.appointments.insert_one(appt.copy())
+    doc.pop("_id", None)
+    return doc
+
+@api.get("/bookings", dependencies=[Depends(require_role("admin"))])
+async def list_bookings():
+    return await db.bookings.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+# ----------------------- CUSTOMERS (admin) -----------------------
+@api.get("/customers")
+async def list_customers(admin=Depends(require_role("admin"))):
+    customers = await db.users.find({"role": "customer"}, {"_id": 0, "password": 0}).to_list(500)
+    # enrich
+    for c in customers:
+        inv_count = await db.invoices.count_documents({"customer_id": c["id"]})
+        appt_count = await db.appointments.count_documents({"customer_id": c["id"]})
+        c["invoice_count"] = inv_count
+        c["appointment_count"] = appt_count
+    return customers
+
+@api.get("/customers/{cid}")
+async def get_customer(cid: str, user=Depends(get_current_user)):
+    if user["role"] == "customer" and user["id"] != cid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    customer = await db.users.find_one({"id": cid, "role": "customer"}, {"_id": 0, "password": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    # enrich with technician
+    if customer.get("assigned_technician_id"):
+        tech = await db.users.find_one({"id": customer["assigned_technician_id"]}, {"_id": 0, "password": 0})
+        customer["technician"] = tech
+    return customer
+
+# ----------------------- TECHNICIANS -----------------------
+@api.get("/technicians")
+async def list_technicians(user=Depends(get_current_user)):
+    techs = await db.users.find({"role": "technician"}, {"_id": 0, "password": 0}).to_list(200)
+    return techs
+
+@api.post("/technicians")
+async def create_technician(body: RegisterInput, specialization: str = "General IT", admin=Depends(require_role("admin"))):
+    existing = await db.users.find_one({"email": body.email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already exists")
+    tech = {
+        "id": str(uuid.uuid4()),
+        "name": body.name,
+        "email": body.email.lower(),
+        "password": hash_password(body.password),
+        "role": "technician",
+        "phone": body.phone,
+        "specialization": specialization,
+        "rating": 5.0,
+        "photo": None,
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(tech.copy())
+    tech.pop("password", None)
+    tech.pop("_id", None)
+    return tech
+
+@api.post("/technicians/assign")
+async def assign_technician(body: AssignTechInput, admin=Depends(require_role("admin"))):
+    await db.users.update_one({"id": body.customer_id, "role": "customer"}, {"$set": {"assigned_technician_id": body.technician_id}})
+    return {"ok": True}
+
+# ----------------------- APPOINTMENTS -----------------------
+@api.get("/appointments")
+async def list_appointments(user=Depends(get_current_user)):
+    q = {}
+    if user["role"] == "customer":
+        q = {"customer_id": user["id"]}
+    elif user["role"] == "technician":
+        q = {"technician_id": user["id"]}
+    appts = await db.appointments.find(q, {"_id": 0}).sort("scheduled_date", -1).to_list(500)
+    # enrich
+    for a in appts:
+        if a.get("customer_id"):
+            c = await db.users.find_one({"id": a["customer_id"]}, {"_id": 0, "name": 1, "email": 1, "phone": 1, "address": 1})
+            a["customer"] = c
+        if a.get("technician_id"):
+            t = await db.users.find_one({"id": a["technician_id"]}, {"_id": 0, "name": 1, "specialization": 1, "phone": 1})
+            a["technician"] = t
+    return appts
+
+@api.patch("/appointments/{aid}")
+async def update_appointment(aid: str, body: UpdateAppointmentInput, user=Depends(get_current_user)):
+    appt = await db.appointments.find_one({"id": aid}, {"_id": 0})
+    if not appt:
+        raise HTTPException(status_code=404, detail="Not found")
+    if user["role"] == "technician" and appt.get("technician_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "customer":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await db.appointments.update_one({"id": aid}, {"$set": updates})
+        # if completed, add to service history
+        if updates.get("status") == "completed":
+            await db.service_history.insert_one({
+                "id": str(uuid.uuid4()),
+                "customer_id": appt["customer_id"],
+                "technician_id": appt.get("technician_id"),
+                "appointment_id": aid,
+                "service_type": appt.get("service_type"),
+                "description": appt.get("description"),
+                "notes": updates.get("notes", appt.get("notes", "")),
+                "report": updates.get("report"),
+                "completed_at": now_iso(),
+            })
+    return await db.appointments.find_one({"id": aid}, {"_id": 0})
+
+# ----------------------- INVOICES / PAYMENTS -----------------------
+@api.get("/invoices")
+async def list_invoices(user=Depends(get_current_user)):
+    q = {} if user["role"] == "admin" else {"customer_id": user["id"]}
+    invs = await db.invoices.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    if user["role"] == "admin":
+        for i in invs:
+            c = await db.users.find_one({"id": i.get("customer_id")}, {"_id": 0, "name": 1, "email": 1})
+            i["customer"] = c
+    return invs
+
+@api.post("/invoices")
+async def create_invoice(body: InvoiceInput, admin=Depends(require_role("admin"))):
+    inv = {
+        "id": str(uuid.uuid4()),
+        "invoice_number": f"GTS-{datetime.now().strftime('%Y%m')}-{str(uuid.uuid4())[:6].upper()}",
+        **body.model_dump(),
+        "created_at": now_iso(),
+    }
+    await db.invoices.insert_one(inv.copy())
+    inv.pop("_id", None)
+    return inv
+
+@api.get("/invoices/{iid}")
+async def get_invoice(iid: str, user=Depends(get_current_user)):
+    inv = await db.invoices.find_one({"id": iid}, {"_id": 0})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Not found")
+    if user["role"] == "customer" and inv.get("customer_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    c = await db.users.find_one({"id": inv.get("customer_id")}, {"_id": 0, "password": 0})
+    inv["customer"] = c
+    return inv
+
+@api.get("/payments")
+async def list_payments(user=Depends(get_current_user)):
+    q = {} if user["role"] == "admin" else {"customer_id": user["id"]}
+    invs = await db.invoices.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    # treat paid invoices as payments; plus payment log entries
+    payments = [i for i in invs if i.get("status") == "paid"]
+    if user["role"] == "admin":
+        for p in payments:
+            c = await db.users.find_one({"id": p.get("customer_id")}, {"_id": 0, "name": 1, "email": 1})
+            p["customer"] = c
+    return payments
+
+# ----------------------- SERVICE HISTORY -----------------------
+@api.get("/service-history")
+async def service_history(user=Depends(get_current_user)):
+    q = {} if user["role"] == "admin" else (
+        {"customer_id": user["id"]} if user["role"] == "customer" else {"technician_id": user["id"]}
+    )
+    hist = await db.service_history.find(q, {"_id": 0}).sort("completed_at", -1).to_list(1000)
+    for h in hist:
+        if h.get("technician_id"):
+            t = await db.users.find_one({"id": h["technician_id"]}, {"_id": 0, "name": 1})
+            h["technician_name"] = t["name"] if t else None
+        if user["role"] == "admin" and h.get("customer_id"):
+            c = await db.users.find_one({"id": h["customer_id"]}, {"_id": 0, "name": 1})
+            h["customer_name"] = c["name"] if c else None
+    return hist
+
+# ----------------------- TICKETS -----------------------
+@api.get("/tickets")
+async def list_tickets(user=Depends(get_current_user)):
+    q = {}
+    if user["role"] == "customer":
+        q = {"customer_id": user["id"]}
+    elif user["role"] == "technician":
+        q = {"$or": [{"assigned_to": user["id"]}, {"customer_id": {"$in": await _customers_for_tech(user["id"])}}]}
+    tickets = await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for t in tickets:
+        if t.get("customer_id"):
+            c = await db.users.find_one({"id": t["customer_id"]}, {"_id": 0, "name": 1, "email": 1})
+            t["customer"] = c
+    return tickets
+
+async def _customers_for_tech(tid: str):
+    rows = await db.users.find({"role": "customer", "assigned_technician_id": tid}, {"_id": 0, "id": 1}).to_list(500)
+    return [r["id"] for r in rows]
+
+@api.post("/tickets")
+async def create_ticket(body: TicketInput, user=Depends(get_current_user)):
+    t = {
+        "id": str(uuid.uuid4()),
+        "ticket_number": f"TKT-{str(uuid.uuid4())[:8].upper()}",
+        "customer_id": user["id"] if user["role"] == "customer" else None,
+        "assigned_to": user.get("assigned_technician_id") if user["role"] == "customer" else None,
+        "status": "open",
+        **body.model_dump(),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.tickets.insert_one(t.copy())
+    t.pop("_id", None)
+    return t
+
+@api.patch("/tickets/{tid}")
+async def update_ticket(tid: str, updates: dict, user=Depends(get_current_user)):
+    allowed = {k: v for k, v in updates.items() if k in ["status", "assigned_to", "priority", "resolution"]}
+    allowed["updated_at"] = now_iso()
+    await db.tickets.update_one({"id": tid}, {"$set": allowed})
+    return await db.tickets.find_one({"id": tid}, {"_id": 0})
+
+# ----------------------- MESSAGES -----------------------
+@api.get("/messages")
+async def list_messages(with_user: Optional[str] = None, user=Depends(get_current_user)):
+    q = {"$or": [{"sender_id": user["id"]}, {"recipient_id": user["id"]}]}
+    if with_user:
+        q = {"$or": [
+            {"sender_id": user["id"], "recipient_id": with_user},
+            {"sender_id": with_user, "recipient_id": user["id"]},
+        ]}
+    msgs = await db.messages.find(q, {"_id": 0}).sort("created_at", 1).to_list(1000)
+    return msgs
+
+@api.post("/messages")
+async def send_message(body: MessageInput, user=Depends(get_current_user)):
+    m = {
+        "id": str(uuid.uuid4()),
+        "sender_id": user["id"],
+        "sender_name": user["name"],
+        "sender_role": user["role"],
+        "recipient_id": body.recipient_id,
+        "content": body.content,
+        "created_at": now_iso(),
+        "read": False,
+    }
+    await db.messages.insert_one(m.copy())
+    m.pop("_id", None)
+    return m
+
+@api.get("/conversations")
+async def conversations(user=Depends(get_current_user)):
+    # get distinct users messaged
+    msgs = await db.messages.find({"$or": [{"sender_id": user["id"]}, {"recipient_id": user["id"]}]}, {"_id": 0}).to_list(2000)
+    counterparts = {}
+    for m in msgs:
+        other = m["recipient_id"] if m["sender_id"] == user["id"] else m["sender_id"]
+        counterparts[other] = m
+    convs = []
+    for uid, last in counterparts.items():
+        u = await db.users.find_one({"id": uid}, {"_id": 0, "name": 1, "role": 1, "photo": 1})
+        convs.append({"user": u, "user_id": uid, "last_message": last})
+    return convs
+
+# ----------------------- REVIEWS -----------------------
+@api.get("/reviews")
+async def list_reviews():
+    return await db.reviews.find({}, {"_id": 0}).sort("created_at", -1).limit(20).to_list(20)
+
+# ----------------------- ANALYTICS -----------------------
+@api.get("/analytics/overview", dependencies=[Depends(require_role("admin"))])
+async def analytics_overview():
+    customers = await db.users.count_documents({"role": "customer"})
+    techs = await db.users.count_documents({"role": "technician"})
+    invoices = await db.invoices.count_documents({})
+    paid_invoices = await db.invoices.find({"status": "paid"}, {"_id": 0, "amount": 1}).to_list(5000)
+    revenue = sum(i.get("amount", 0) for i in paid_invoices)
+    open_tickets = await db.tickets.count_documents({"status": {"$in": ["open", "in_progress"]}})
+    upcoming = await db.appointments.count_documents({"status": "scheduled"})
+    bookings = await db.bookings.count_documents({})
+
+    # revenue by month (last 12)
+    by_month = {}
+    for inv in paid_invoices:
+        # amount ok; we need date from invoice
+        pass
+    all_paid = await db.invoices.find({"status": "paid"}, {"_id": 0, "amount": 1, "created_at": 1}).to_list(5000)
+    for inv in all_paid:
+        created = inv.get("created_at", "")[:7]  # YYYY-MM
+        by_month[created] = by_month.get(created, 0) + inv.get("amount", 0)
+    rev_series = [{"month": k, "amount": v} for k, v in sorted(by_month.items())]
+
+    return {
+        "customers": customers,
+        "technicians": techs,
+        "invoices": invoices,
+        "revenue": round(revenue, 2),
+        "open_tickets": open_tickets,
+        "upcoming_appointments": upcoming,
+        "bookings": bookings,
+        "revenue_by_month": rev_series,
+    }
+
+# ----------------------- DASHBOARD STATS (customer/tech) -----------------------
+@api.get("/dashboard/stats")
+async def dashboard_stats(user=Depends(get_current_user)):
+    if user["role"] == "customer":
+        invs = await db.invoices.count_documents({"customer_id": user["id"]})
+        paid = await db.invoices.find({"customer_id": user["id"], "status": "paid"}, {"_id": 0, "amount": 1}).to_list(500)
+        spent = sum(i.get("amount", 0) for i in paid)
+        appts = await db.appointments.count_documents({"customer_id": user["id"], "status": "scheduled"})
+        tkts = await db.tickets.count_documents({"customer_id": user["id"], "status": {"$in": ["open", "in_progress"]}})
+        return {"invoices": invs, "total_spent": round(spent, 2), "upcoming_appointments": appts, "open_tickets": tkts}
+    if user["role"] == "technician":
+        assigned = await db.users.count_documents({"assigned_technician_id": user["id"]})
+        appts = await db.appointments.count_documents({"technician_id": user["id"], "status": "scheduled"})
+        completed = await db.appointments.count_documents({"technician_id": user["id"], "status": "completed"})
+        tkts = await db.tickets.count_documents({"assigned_to": user["id"], "status": {"$in": ["open", "in_progress"]}})
+        return {"assigned_customers": assigned, "upcoming_appointments": appts, "completed_jobs": completed, "open_tickets": tkts}
+    return {}
+
+# ----------------------- FAQS (static) -----------------------
+@api.get("/faqs")
+async def list_faqs():
+    return [
+        {"q": "What services does Global Tech Solutions offer?", "a": "We provide computer repair, phone/tablet support, email setup and recovery, software installation, antivirus and malware removal, Wi-Fi network setup, data backup and recovery, remote support, on-site technician visits, and business IT support."},
+        {"q": "How quickly can I get help?", "a": "For emergency issues, we provide same-day remote support 7 days a week. Standard bookings are usually scheduled within 24-48 hours."},
+        {"q": "Do you offer remote support?", "a": "Yes, most software, email, security, and configuration issues can be resolved via secure remote support. Our technician will walk you through a one-time connection link."},
+        {"q": "Are my devices and data safe?", "a": "Absolutely. All sessions are encrypted, technicians follow strict data-handling protocols, and we never store credentials. Sensitive files are handled under NDA for business clients."},
+        {"q": "Do you support both Windows and Mac?", "a": "Yes, our technicians are certified to work on Windows PCs, Macs, iPhones, iPads, Android devices, Chromebooks, and most business network hardware."},
+        {"q": "What are your support plans?", "a": "We offer Basic, Pro, Business, and Lifetime VIP plans. See our Pricing page for details or contact us for custom enterprise quotes."},
+        {"q": "Is Global Tech Solutions affiliated with Microsoft, Apple, or other brands?", "a": "No. Global Tech Solutions is an independent technical support provider and is not affiliated, endorsed, or sponsored by Microsoft, Apple, Google, or any third-party brand unless explicitly stated as an authorized partner."},
+        {"q": "How do payments and invoices work?", "a": "We issue itemized invoices for every service. Payment is accepted via check, ACH, or card. All invoices and receipts are available in your customer dashboard for download."},
+        {"q": "Can I cancel or reschedule an appointment?", "a": "Yes, you can reschedule or cancel from your customer dashboard up to 4 hours before the appointment at no charge."},
+        {"q": "Do you serve businesses?", "a": "Yes — we provide managed IT, cybersecurity, cloud infrastructure, and help-desk services for small to mid-sized businesses."},
+    ]
+
+# ----------------------- STARTUP: SEED DATA -----------------------
+async def seed_if_empty():
+    existing_admin = await db.users.find_one({"role": "admin"})
+    if existing_admin:
+        logger.info("Database already seeded")
+        return
+    logger.info("Seeding initial data...")
+
+    # ---- Admin ----
+    admin = {
+        "id": str(uuid.uuid4()),
+        "name": "Admin",
+        "email": "admin@globaltechsolutions.com",
+        "password": hash_password("Admin@123"),
+        "role": "admin",
+        "phone": "+1-800-555-0100",
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(admin.copy())
+
+    # ---- Technicians (real names from history + extras) ----
+    tech_defs = [
+        {"name": "Ravi Ojha", "email": "ravi@globaltechsolutions.com", "specialization": "Network Security & Cybersecurity", "phone": "+1-800-555-0201", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?w=400&q=80"},
+        {"name": "Sumit Kumar", "email": "sumit@globaltechsolutions.com", "specialization": "Endpoint Security & Firewalls", "phone": "+1-800-555-0202", "rating": 4.8, "photo": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80"},
+        {"name": "Sonam Sharma", "email": "sonam@globaltechsolutions.com", "specialization": "Software & Email Support", "phone": "+1-800-555-0203", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=400&q=80"},
+        {"name": "David Chen", "email": "david@globaltechsolutions.com", "specialization": "On-Site & Hardware Repair", "phone": "+1-800-555-0204", "rating": 4.7, "photo": "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=400&q=80"},
+    ]
+    techs = []
+    for t in tech_defs:
+        doc = {
+            "id": str(uuid.uuid4()),
+            "name": t["name"],
+            "email": t["email"],
+            "password": hash_password("Tech@123"),
+            "role": "technician",
+            "phone": t["phone"],
+            "specialization": t["specialization"],
+            "rating": t["rating"],
+            "photo": t["photo"],
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(doc.copy())
+        techs.append(doc)
+
+    ravi = next(t for t in techs if t["name"] == "Ravi Ojha")
+    sumit = next(t for t in techs if t["name"] == "Sumit Kumar")
+    sonam = next(t for t in techs if t["name"] == "Sonam Sharma")
+
+    # ---- Real Customer: Sanford Burstein ----
+    sandy = {
+        "id": str(uuid.uuid4()),
+        "name": "Sanford Burstein",
+        "email": "bsandy2@aol.com",
+        "password": hash_password("Welcome@2026"),  # initial password – can be reset
+        "role": "customer",
+        "phone": "201-927-5444",
+        "address": "36 Greenwood Ave, West Orange, NJ 07052",
+        "previous_address": "520 Adams St, Hoboken, NJ 07030",
+        "customer_since": "2017-11-02",
+        "status": "Existing (VIP)",
+        "active_plan": "Lifetime VIP Plan",
+        "assigned_technician_id": ravi["id"],
+        "payment_method": "Check on file",
+        "photo": None,
+        "created_at": now_iso(),
+        "notes": "Long-standing customer since Nov 2017. Upgraded to Lifetime VIP in Oct 2025.",
+    }
+    await db.users.insert_one(sandy.copy())
+
+    # ---- Sanford's Real Service History & Invoices ----
+    sandy_history = [
+        {"date": "2017-11-02", "amount": 400.00, "method": "Check", "tech": None, "label": "Initial registration & Setup", "status": "new", "service_type": "Initial Registration", "address": "520 Adams St, Hoboken, NJ 07030"},
+        {"date": "2018-06-27", "amount": 874.27, "method": "Check", "tech": ravi["id"], "label": "MS Service Renewal", "status": "existing", "service_type": "Microsoft Service Renewal", "address": "520 Adams St, Hoboken, NJ 07030"},
+        {"date": "2019-02-18", "amount": 529.99, "method": "Check", "tech": ravi["id"], "label": "Service Renewal", "status": "existing", "service_type": "Support Renewal", "address": "520 Adams St, Hoboken, NJ 07030"},
+        {"date": "2020-11-12", "amount": 349.99, "method": "Check", "tech": sumit["id"], "label": "2 Years IP Hider Security", "status": "existing", "service_type": "Security Software — 2 Year IP Hider", "address": "36 Greenwood Ave, West Orange, NJ 07052"},
+        {"date": "2022-03-30", "amount": 607.99, "method": "Check", "tech": ravi["id"], "label": "5 Years Support + All Devices Covered", "status": "existing", "service_type": "5-Year Full Device Coverage", "address": "36 Greenwood Ave, West Orange, NJ 07052"},
+        {"date": "2023-10-31", "amount": 426.00, "method": "Check", "tech": sumit["id"], "label": "3 Years SonicWall Security", "status": "existing", "service_type": "3-Year SonicWall Security Subscription", "address": "36 Greenwood Ave, West Orange, NJ 07052"},
+        {"date": "2025-10-15", "amount": 6400.00, "method": "Check", "tech": ravi["id"], "label": "Lifetime VIP Plan: 10 Devices (Transferable) + Dedicated Technician + Crypto Protection + Crypto Expert Direct Access", "status": "existing", "service_type": "Lifetime VIP Plan", "address": "36 Greenwood Ave, West Orange, NJ 07052"},
+    ]
+    for idx, h in enumerate(sandy_history, 1):
+        inv = {
+            "id": str(uuid.uuid4()),
+            "invoice_number": f"GTS-{h['date'][:7].replace('-', '')}-{idx:04d}",
+            "customer_id": sandy["id"],
+            "amount": h["amount"],
+            "description": h["label"],
+            "items": [{"name": h["service_type"], "qty": 1, "price": h["amount"]}],
+            "status": "paid",
+            "payment_method": h["method"],
+            "due_date": h["date"],
+            "paid_at": h["date"],
+            "created_at": h["date"] + "T10:00:00+00:00",
+            "service_address": h["address"],
+        }
+        await db.invoices.insert_one(inv.copy())
+        if h["tech"]:
+            await db.service_history.insert_one({
+                "id": str(uuid.uuid4()),
+                "customer_id": sandy["id"],
+                "technician_id": h["tech"],
+                "appointment_id": None,
+                "service_type": h["service_type"],
+                "description": h["label"],
+                "notes": f"Completed by technician on {h['date']}.",
+                "report": None,
+                "completed_at": h["date"] + "T16:30:00+00:00",
+            })
+
+    # Upcoming appointment for Sanford
+    await db.appointments.insert_one({
+        "id": str(uuid.uuid4()),
+        "customer_id": sandy["id"],
+        "technician_id": ravi["id"],
+        "service_type": "Quarterly VIP Health Check",
+        "description": "Scheduled VIP quarterly review: firewall audit, device health sweep, crypto wallet security review.",
+        "scheduled_date": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
+        "scheduled_time": "11:00 AM",
+        "status": "scheduled",
+        "notes": "",
+        "urgency": "normal",
+        "created_at": now_iso(),
+    })
+
+    # Sample ticket
+    await db.tickets.insert_one({
+        "id": str(uuid.uuid4()),
+        "ticket_number": f"TKT-{str(uuid.uuid4())[:8].upper()}",
+        "customer_id": sandy["id"],
+        "assigned_to": ravi["id"],
+        "status": "open",
+        "subject": "Outlook intermittently asks for password",
+        "description": "Outlook on my desktop keeps prompting for the AOL password every few hours. Happens on Wi-Fi only.",
+        "priority": "medium",
+        "category": "email",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    })
+
+    # ---- A couple of sample customers so admin views are useful ----
+    sample_customers = [
+        {"name": "Linda Martinez", "email": "linda.m@example.com", "phone": "973-555-0192", "address": "14 Elm St, Newark, NJ", "tech": sonam["id"], "plan": "Pro Annual"},
+        {"name": "Michael Thompson", "email": "mike.t@example.com", "phone": "212-555-0167", "address": "88 Broadway, New York, NY", "tech": sumit["id"], "plan": "Business"},
+        {"name": "Aisha Patel", "email": "aisha.p@example.com", "phone": "908-555-0143", "address": "27 Oak Ln, Edison, NJ", "tech": sonam["id"], "plan": "Basic"},
+    ]
+    for sc in sample_customers:
+        cid = str(uuid.uuid4())
+        await db.users.insert_one({
+            "id": cid,
+            "name": sc["name"],
+            "email": sc["email"],
+            "password": hash_password("Customer@123"),
+            "role": "customer",
+            "phone": sc["phone"],
+            "address": sc["address"],
+            "active_plan": sc["plan"],
+            "assigned_technician_id": sc["tech"],
+            "payment_method": "Visa ending 4242",
+            "photo": None,
+            "created_at": now_iso(),
+            "customer_since": "2023-04-15",
+            "status": "Existing",
+        })
+        # one invoice
+        await db.invoices.insert_one({
+            "id": str(uuid.uuid4()),
+            "invoice_number": f"GTS-{datetime.now().strftime('%Y%m')}-{str(uuid.uuid4())[:6].upper()}",
+            "customer_id": cid,
+            "amount": 199.00,
+            "description": f"{sc['plan']} subscription",
+            "items": [{"name": sc["plan"], "qty": 1, "price": 199.00}],
+            "status": "paid",
+            "payment_method": "Credit Card",
+            "due_date": now_iso()[:10],
+            "paid_at": now_iso(),
+            "created_at": now_iso(),
+        })
+
+    # ---- Plans ----
+    plans = [
+        {"id": str(uuid.uuid4()), "name": "Basic", "price": 49, "duration": "per month", "description": "Remote support essentials for individuals.", "popular": False,
+         "features": ["Remote support (business hours)", "Virus & malware removal", "Email & software setup", "1 device covered", "Email support response in 24h"]},
+        {"id": str(uuid.uuid4()), "name": "Pro", "price": 99, "duration": "per month", "description": "Priority support for power users and freelancers.", "popular": True,
+         "features": ["Priority remote support (7 days)", "Up to 3 devices", "Antivirus + VPN included", "Data backup (50GB)", "1 on-site visit / year", "Chat with dedicated technician"]},
+        {"id": str(uuid.uuid4()), "name": "Business", "price": 299, "duration": "per month", "description": "Managed IT for small and mid-sized businesses.", "popular": False,
+         "features": ["Up to 15 endpoints", "Managed firewall & SonicWall", "24/7 emergency response", "Cloud backup (500GB)", "Quarterly on-site visits", "Dedicated account manager"]},
+        {"id": str(uuid.uuid4()), "name": "Lifetime VIP", "price": 6400, "duration": "one-time", "description": "White-glove lifetime coverage — 10 devices transferable.", "popular": False,
+         "features": ["10 devices (transferable)", "Dedicated technician", "Crypto protection & wallet audits", "Direct line to crypto security expert", "Unlimited remote & on-site", "Lifetime coverage, no renewals"]},
+    ]
+    for p in plans:
+        await db.plans.insert_one(p.copy())
+
+    # ---- Services catalog ----
+    services = [
+        {"id": str(uuid.uuid4()), "slug": "computer-repair", "title": "Computer Repair & Troubleshooting", "icon": "Laptop", "desc": "Desktop and laptop diagnostics, hardware repair, OS reinstall, performance tuning for Windows and Mac."},
+        {"id": str(uuid.uuid4()), "slug": "phone-tablet", "title": "Phone & Tablet Support", "icon": "Smartphone", "desc": "iPhone, iPad, and Android setup, backup, data transfer, screen and battery recommendations."},
+        {"id": str(uuid.uuid4()), "slug": "email-setup", "title": "Email Setup & Recovery", "icon": "Mail", "desc": "Gmail, Outlook, AOL, Yahoo, and business email setup, account recovery, migration, and sync."},
+        {"id": str(uuid.uuid4()), "slug": "software-install", "title": "Software Installation", "icon": "Download", "desc": "Office, accounting, design, and business apps — correctly licensed and configured for your workflow."},
+        {"id": str(uuid.uuid4()), "slug": "antivirus-malware", "title": "Antivirus & Malware Removal", "icon": "ShieldCheck", "desc": "Deep-scan malware removal, ransomware mitigation, and endpoint hardening with managed AV."},
+        {"id": str(uuid.uuid4()), "slug": "wifi-network", "title": "Wi-Fi & Network Setup", "icon": "Wifi", "desc": "Home and office Wi-Fi, mesh networks, VLANs, VPNs, and SonicWall managed firewalls."},
+        {"id": str(uuid.uuid4()), "slug": "backup-recovery", "title": "Data Backup & Recovery", "icon": "HardDrive", "desc": "Local and cloud backup strategy, disaster recovery planning, and file / drive recovery."},
+        {"id": str(uuid.uuid4()), "slug": "remote-support", "title": "Remote Technical Support", "icon": "MonitorSmartphone", "desc": "Secure one-click remote sessions — most issues resolved in under an hour."},
+        {"id": str(uuid.uuid4()), "slug": "on-site", "title": "On-Site Technician Visits", "icon": "MapPin", "desc": "Scheduled or same-day on-site technician dispatch across the tri-state area."},
+        {"id": str(uuid.uuid4()), "slug": "business-it", "title": "Business IT Support", "icon": "Building2", "desc": "Managed IT, help desk, cybersecurity, cloud migration, and compliance for growing teams."},
+    ]
+    for s in services:
+        await db.services.insert_one(s.copy())
+
+    # ---- Reviews ----
+    reviews = [
+        {"id": str(uuid.uuid4()), "name": "Sanford B.", "location": "West Orange, NJ", "rating": 5, "text": "Been with Global Tech since 2017. Ravi and the team are responsive, honest, and take care of my devices and crypto security like it's their own. Worth every penny.", "service": "Lifetime VIP", "created_at": now_iso()},
+        {"id": str(uuid.uuid4()), "name": "Linda M.", "location": "Newark, NJ", "rating": 5, "text": "Sonam fixed an email issue I'd been fighting for weeks in under 20 minutes. Fantastic service.", "service": "Email Recovery", "created_at": now_iso()},
+        {"id": str(uuid.uuid4()), "name": "Michael T.", "location": "New York, NY", "rating": 5, "text": "Our small firm moved all IT to Global Tech. Firewall, backup, and help-desk — everything just works now.", "service": "Business IT", "created_at": now_iso()},
+        {"id": str(uuid.uuid4()), "name": "Aisha P.", "location": "Edison, NJ", "rating": 5, "text": "Called on a Sunday after a ransomware scare. On a remote session in 15 minutes. Cleaned and hardened.", "service": "Malware Removal", "created_at": now_iso()},
+        {"id": str(uuid.uuid4()), "name": "Robert H.", "location": "Hoboken, NJ", "rating": 4, "text": "Professional, clear pricing, no upsell. Exactly what I want from a tech company.", "service": "Computer Repair", "created_at": now_iso()},
+    ]
+    for r in reviews:
+        await db.reviews.insert_one(r.copy())
+
+    logger.info("Seed complete.")
+
+app.include_router(api)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def on_startup():
+    await seed_if_empty()
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    client.close()
