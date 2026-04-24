@@ -331,6 +331,17 @@ async def resend_otp(body: ResendOTPInput):
         return {"ok": True}
     if user["role"] != "customer":
         raise HTTPException(status_code=400, detail="OTP not required for this account")
+    # Server-side throttle: reject if last OTP was issued < 20s ago
+    existing = await db.auth_otps.find_one({"email": email}, {"_id": 0})
+    if existing:
+        created = existing.get("created_at")
+        if isinstance(created, str):
+            created = datetime.fromisoformat(created)
+        if created and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if created and (datetime.now(timezone.utc) - created).total_seconds() < 20:
+            wait_s = 20 - int((datetime.now(timezone.utc) - created).total_seconds())
+            raise HTTPException(status_code=429, detail=f"Please wait {wait_s}s before requesting a new code.")
     await _issue_otp(user)
     return {"ok": True, "message": "A new code has been sent."}
 

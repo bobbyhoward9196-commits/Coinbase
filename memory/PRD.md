@@ -53,15 +53,26 @@ Real customer: Sanford Burstein (since Nov 2017) with full 7-year service/paymen
 - Seeded Sanford with 2 devices (Dell OptiPlex, Lenovo ThinkPad) + 1 approved QuickBooks request
 - ✅ Backend test: 29/29 passed
 
+### Iteration 3 — 2FA / OTP Login (Apr 2026)
+- **Resend integration** (API key in `/app/backend/.env` as `RESEND_API_KEY`)
+- **2FA/OTP required for CUSTOMER role only** — admin/tech log in directly
+- New endpoints: `POST /api/auth/verify-otp`, `POST /api/auth/resend-otp` (20s throttle)
+- `auth_otps` collection stores bcrypt-hashed 6-digit codes with 5-min TTL, 5-attempt lockout, consumed-on-verify
+- Frontend: 2-step Login UI — email/password → branded 6-digit OTP entry screen with auto-advance, paste support, resend cooldown, and "Back to sign in"
+- Branded HTML email template via Resend (custom domain verification still needed for real delivery)
+- In test mode, OTP is logged to backend stderr as `DEV OTP for <email>: NNNNNN`
+- ✅ Backend tests: 15/15 | Frontend tests: 6/6
+
 ## Backlog / Not yet
-- P1: Email notifications (SendGrid/Resend) on booking/invoice/software-approval
 - P1: File upload for technician reports (object storage)
 - P1: Stripe payment processing (currently UI-only)
-- P2: Password reset flow
+- P1: Verify custom Resend sender domain so OTPs deliver to real customer inboxes
+- P2: Password reset flow (also via Resend)
 - P2: Technician profile photo upload
 - P2: PDF invoice generation (currently TXT)
 - P2: Admin/tech create devices on customer behalf
 - P2: Partial PATCH for devices (currently requires full payload)
+- P2: Email notifications on booking/invoice/software-approval (reuse Resend integration)
 
 ## Next Tasks
-- Whatever the user chooses next — optional: email/Stripe/object-storage integrations.
+- Whatever the user chooses next — optional: Stripe payments / object-storage / Resend domain verification.
