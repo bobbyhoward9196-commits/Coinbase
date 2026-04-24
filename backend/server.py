@@ -607,6 +607,135 @@ async def list_faqs():
         {"q": "Do you serve businesses?", "a": "Yes — we provide managed IT, cybersecurity, cloud infrastructure, and help-desk services for small to mid-sized businesses."},
     ]
 
+# ----------------------- SOFTWARE CATALOG & REQUESTS -----------------------
+class SoftwareRequestInput(BaseModel):
+    software_id: str
+    quantity: Optional[int] = 1
+    reason: Optional[str] = ""
+
+class SoftwareRequestUpdate(BaseModel):
+    status: Optional[str] = None  # pending / under_review / approved / delivered / denied
+    advisor_notes: Optional[str] = None
+    assigned_advisor_id: Optional[str] = None
+
+class DeviceInput(BaseModel):
+    name: str
+    type: str
+    os: Optional[str] = None
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    serial: Optional[str] = None
+    processor: Optional[str] = None
+    ram: Optional[str] = None
+    storage: Optional[str] = None
+    notes: Optional[str] = None
+
+@api.get("/software-catalog")
+async def list_software_catalog(category: Optional[str] = None):
+    q = {"category": category} if category else {}
+    items = await db.software_catalog.find(q, {"_id": 0}).sort("category", 1).to_list(500)
+    return items
+
+@api.get("/software-requests")
+async def list_software_requests(user=Depends(get_current_user)):
+    if user["role"] == "admin":
+        q = {}
+    elif user["role"] == "technician":
+        customer_ids = await _customers_for_tech(user["id"])
+        q = {"$or": [{"assigned_advisor_id": user["id"]}, {"customer_id": {"$in": customer_ids}}]}
+    else:
+        q = {"customer_id": user["id"]}
+    rows = await db.software_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return rows
+
+@api.post("/software-requests")
+async def create_software_request(body: SoftwareRequestInput, user=Depends(get_current_user)):
+    if user["role"] != "customer":
+        raise HTTPException(status_code=403, detail="Only customers can request software")
+    sw = await db.software_catalog.find_one({"id": body.software_id}, {"_id": 0})
+    if not sw:
+        raise HTTPException(status_code=404, detail="Software not found")
+    req = {
+        "id": str(uuid.uuid4()),
+        "request_number": f"SR-{str(uuid.uuid4())[:8].upper()}",
+        "customer_id": user["id"],
+        "customer_name": user["name"],
+        "customer_email": user["email"],
+        "software_id": sw["id"],
+        "software_name": sw["name"],
+        "software_provider": sw.get("provider"),
+        "software_category": sw.get("category"),
+        "quantity": body.quantity or 1,
+        "reason": body.reason or "",
+        "status": "pending",
+        "advisor_notes": "",
+        "assigned_advisor_id": user.get("assigned_technician_id"),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.software_requests.insert_one(req.copy())
+    req.pop("_id", None)
+    return req
+
+@api.patch("/software-requests/{rid}")
+async def update_software_request(rid: str, body: SoftwareRequestUpdate, user=Depends(get_current_user)):
+    if user["role"] == "customer":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    existing = await db.software_requests.find_one({"id": rid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Not found")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates["updated_at"] = now_iso()
+    await db.software_requests.update_one({"id": rid}, {"$set": updates})
+    return await db.software_requests.find_one({"id": rid}, {"_id": 0})
+
+# ----------------------- PC / DEVICES -----------------------
+@api.get("/devices")
+async def list_devices(customer_id: Optional[str] = None, user=Depends(get_current_user)):
+    if user["role"] == "customer":
+        q = {"customer_id": user["id"]}
+    elif user["role"] == "technician":
+        allowed = await _customers_for_tech(user["id"])
+        if customer_id and customer_id not in allowed:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        q = {"customer_id": customer_id} if customer_id else {"customer_id": {"$in": allowed}}
+    else:
+        q = {"customer_id": customer_id} if customer_id else {}
+    rows = await db.devices.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return rows
+
+@api.post("/devices")
+async def create_device(body: DeviceInput, user=Depends(get_current_user)):
+    if user["role"] != "customer":
+        raise HTTPException(status_code=403, detail="Only customers can add devices")
+    d = {"id": str(uuid.uuid4()), "customer_id": user["id"], **body.model_dump(),
+         "created_at": now_iso(), "updated_at": now_iso()}
+    await db.devices.insert_one(d.copy())
+    d.pop("_id", None)
+    return d
+
+@api.patch("/devices/{did}")
+async def update_device(did: str, body: DeviceInput, user=Depends(get_current_user)):
+    d = await db.devices.find_one({"id": did}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if user["role"] == "customer" and d["customer_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates["updated_at"] = now_iso()
+    await db.devices.update_one({"id": did}, {"$set": updates})
+    return await db.devices.find_one({"id": did}, {"_id": 0})
+
+@api.delete("/devices/{did}")
+async def delete_device(did: str, user=Depends(get_current_user)):
+    d = await db.devices.find_one({"id": did}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if user["role"] == "customer" and d["customer_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    await db.devices.delete_one({"id": did})
+    return {"ok": True}
+
 # ----------------------- STARTUP: SEED DATA -----------------------
 async def seed_if_empty():
     existing_admin = await db.users.find_one({"role": "admin"})
@@ -824,6 +953,128 @@ async def seed_if_empty():
     ]
     for r in reviews:
         await db.reviews.insert_one(r.copy())
+
+    # ---- Software catalog (AI + Business + Dev + Security) ----
+    software_catalog = [
+        # ---- AI ----
+        {"name": "ChatGPT Plus", "provider": "OpenAI", "category": "AI Assistants", "description": "Access to GPT-4o, advanced voice, image generation, file uploads.", "highlights": ["Priority access", "GPT-4o + o1", "Custom GPTs", "Advanced Data Analysis"], "price_note": "$20/mo · Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["productivity","research","writing"]},
+        {"name": "ChatGPT Team / Pro", "provider": "OpenAI", "category": "AI Assistants", "description": "Higher limits, deep research, o1-pro reasoning, team workspace.", "highlights": ["o1-pro + Deep Research","Extended context","Team admin"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["enterprise","research"]},
+        {"name": "Claude Pro", "provider": "Anthropic", "category": "AI Assistants", "description": "Claude Sonnet 4.5 & Opus access with Projects and larger context.", "highlights": ["200K context","Projects","Priority bandwidth"], "price_note": "$20/mo · Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["writing","coding","analysis"]},
+        {"name": "Google Gemini Advanced", "provider": "Google", "category": "AI Assistants", "description": "Gemini 3 Pro with Google Workspace integration and 2TB Drive.", "highlights": ["Gemini 3 Pro","2TB storage","Workspace sidebar"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["gmail","docs","search"]},
+        {"name": "Microsoft Copilot Pro", "provider": "Microsoft", "category": "AI Assistants", "description": "AI copilot across Word, Excel, Outlook, PowerPoint.", "highlights": ["Office integration","Designer access","Priority GPT-4"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["office","productivity"]},
+        {"name": "Perplexity Pro", "provider": "Perplexity AI", "category": "AI Assistants", "description": "AI-powered research with real-time web sources and citations.", "highlights": ["Unlimited Pro searches","File uploads","Multiple models"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["research","web"]},
+        {"name": "Midjourney Standard", "provider": "Midjourney", "category": "AI Creative", "description": "Premium AI image generation with fast hours and stealth mode.", "highlights": ["15h fast/mo","Stealth mode","Commercial use"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["design","image"]},
+        {"name": "Runway Gen-4", "provider": "Runway", "category": "AI Creative", "description": "Text-to-video and video editing with Gen-4 AI models.", "highlights": ["Gen-4 video","Unlimited videos","4K upscale"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["video","marketing"]},
+        {"name": "ElevenLabs Creator", "provider": "ElevenLabs", "category": "AI Creative", "description": "Premium AI voice cloning and text-to-speech.", "highlights": ["Instant voice cloning","100K characters/mo","Commercial license"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["voice","audio"]},
+        {"name": "GitHub Copilot Pro", "provider": "GitHub", "category": "AI Developer", "description": "AI pair programmer in your IDE with multi-model support.", "highlights": ["Unlimited completions","GPT-4o + Claude + o1","Copilot Chat"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["coding","developer"]},
+        {"name": "Cursor Pro", "provider": "Cursor", "category": "AI Developer", "description": "AI-first code editor with agent mode and codebase chat.", "highlights": ["500 fast requests","Agent mode","Custom models"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["coding","developer"]},
+        {"name": "Notion AI", "provider": "Notion", "category": "AI Productivity", "description": "AI writing & summarizing inside Notion workspace.", "highlights": ["Q&A on your docs","Writer & translator","Unlimited"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["notes","writing"]},
+        {"name": "Grammarly Premium", "provider": "Grammarly", "category": "AI Productivity", "description": "Advanced grammar, tone, and clarity suggestions with AI assist.", "highlights": ["Tone suggestions","Plagiarism check","Generative AI"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["writing"]},
+
+        # ---- Accounting & Finance ----
+        {"name": "QuickBooks Online Plus", "provider": "Intuit", "category": "Accounting", "description": "Full small-business accounting, invoicing, and bill tracking.", "highlights": ["5 users","Project profitability","Inventory tracking","Time tracking"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["accounting","invoicing"]},
+        {"name": "QuickBooks Self-Employed", "provider": "Intuit", "category": "Accounting", "description": "Mileage, expenses, and Schedule C for freelancers.", "highlights": ["Mileage tracking","Quarterly estimates","TurboTax bundle"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["freelance","tax"]},
+        {"name": "TurboTax Premier", "provider": "Intuit", "category": "Accounting", "description": "Personal tax filing with investment and rental income support.", "highlights": ["Investment income","Rental property","Live assist option"], "price_note": "Included in Pro/Business/VIP (seasonal)", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["tax","personal"]},
+        {"name": "TurboTax Business", "provider": "Intuit", "category": "Accounting", "description": "Tax filing for S-Corp, C-Corp, partnerships, and LLCs.", "highlights": ["Business returns","K-1 forms","Asset depreciation"], "price_note": "Included in Business/VIP (seasonal)", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["tax","business"]},
+        {"name": "FreshBooks Plus", "provider": "FreshBooks", "category": "Accounting", "description": "Cloud invoicing, time tracking, and expenses for service businesses.", "highlights": ["Unlimited invoices","50 clients","Automated recurring"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["invoicing"]},
+
+        # ---- Productivity / Office ----
+        {"name": "Microsoft 365 Business Standard", "provider": "Microsoft", "category": "Productivity", "description": "Word, Excel, Outlook, Teams, OneDrive 1TB, SharePoint.", "highlights": ["Full desktop Office","Teams","1TB OneDrive","Business email"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["office","email"]},
+        {"name": "Google Workspace Business Standard", "provider": "Google", "category": "Productivity", "description": "Gmail, Docs, Drive, Meet with custom domain and 2TB storage.", "highlights": ["Custom domain email","2TB / user","Meet recording"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["email","docs"]},
+        {"name": "Adobe Creative Cloud All Apps", "provider": "Adobe", "category": "Productivity", "description": "Photoshop, Illustrator, Premiere, InDesign, Lightroom, and more.", "highlights": ["20+ apps","Adobe Fonts","Adobe Firefly AI","100GB cloud"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["design","video"]},
+        {"name": "Canva Pro", "provider": "Canva", "category": "Productivity", "description": "Pro templates, brand kits, background remover, Magic Studio AI.", "highlights": ["Magic Studio AI","Brand kit","Scheduler","100M+ assets"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["design","social"]},
+        {"name": "Zoom Pro", "provider": "Zoom", "category": "Productivity", "description": "Unlimited meetings up to 30 hrs, cloud recording, AI Companion.", "highlights": ["30hr meetings","Cloud recording","AI summary"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["meetings","video"]},
+        {"name": "Slack Pro", "provider": "Salesforce/Slack", "category": "Productivity", "description": "Unlimited message history, huddles, Slack AI.", "highlights": ["Full history","Huddles + screen share","Slack AI"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["collaboration","chat"]},
+        {"name": "Dropbox Professional", "provider": "Dropbox", "category": "Productivity", "description": "3TB secure cloud storage with advanced sharing and Dash AI.", "highlights": ["3TB storage","Smart Sync","Dash AI search"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["storage","cloud"]},
+
+        # ---- CRM / Sales ----
+        {"name": "HubSpot Starter Suite", "provider": "HubSpot", "category": "CRM & Sales", "description": "CRM, marketing, sales, and service starter bundle.", "highlights": ["CRM for 3 seats","Email marketing","Live chat","Deals pipeline"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["crm","marketing"]},
+        {"name": "Salesforce Starter", "provider": "Salesforce", "category": "CRM & Sales", "description": "Entry-level Salesforce CRM for small teams.", "highlights": ["Guided onboarding","Email integration","Reports"], "price_note": "Included in Business/VIP (custom)", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["crm","enterprise"]},
+
+        # ---- Website Development ----
+        {"name": "Website Development (Tier 1)", "provider": "Global Tech Solutions", "category": "Website Development", "description": "Custom 5-page business website built by our team with 1 year of hosting and revisions.", "highlights": ["5 pages","Mobile responsive","SEO basics","SSL + hosting (1 yr)","Up to 3 revisions"], "price_note": "Starter tier — ask your advisor", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["website","custom"]},
+        {"name": "Website Development (Tier 2)", "provider": "Global Tech Solutions", "category": "Website Development", "description": "Mid-tier site with CMS, blog, contact flows, and advanced SEO.", "highlights": ["Up to 12 pages","CMS-driven","Blog + newsletter","Advanced SEO","E-commerce ready"], "price_note": "Quote on request", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["website","cms"]},
+        {"name": "WordPress Business Hosting", "provider": "WordPress.com", "category": "Website Development", "description": "Premium managed WordPress hosting with plugins and themes.", "highlights": ["Plugins/themes","200GB","Custom CSS","Google Analytics"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["wordpress","hosting"]},
+        {"name": "Shopify Basic", "provider": "Shopify", "category": "Website Development", "description": "Full online store with cart, checkout, and shipping.", "highlights": ["Online store","Unlimited products","Abandoned cart","24/7 support"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["ecommerce"]},
+        {"name": "Figma Professional", "provider": "Figma", "category": "Website Development", "description": "Collaborative UI/UX design and prototyping tool.", "highlights": ["Unlimited files","Dev mode","FigJam","Shared libraries"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["design","ui-ux"]},
+
+        # ---- Security & Privacy ----
+        {"name": "1Password Business", "provider": "1Password", "category": "Security", "description": "Team password manager with SSO and vault sharing.", "highlights": ["Unlimited vaults","SSO","Travel mode","1GB docs"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["passwords","security"]},
+        {"name": "NordVPN Plus", "provider": "Nord Security", "category": "Security", "description": "Premium VPN with threat protection and password manager.", "highlights": ["6 devices","Threat Protection","NordPass included"], "price_note": "Included in all plans", "included_in_plans": ["Basic","Pro","Business","Lifetime VIP"], "tags": ["vpn","privacy"]},
+        {"name": "Bitdefender Total Security", "provider": "Bitdefender", "category": "Security", "description": "Multi-device antivirus, firewall, and VPN.", "highlights": ["5–10 devices","Anti-ransomware","Parental controls","VPN (200MB)"], "price_note": "Included in all plans", "included_in_plans": ["Basic","Pro","Business","Lifetime VIP"], "tags": ["antivirus"]},
+        {"name": "Malwarebytes Premium", "provider": "Malwarebytes", "category": "Security", "description": "Advanced malware, ransomware, and exploit protection.", "highlights": ["Real-time shield","Anti-exploit","Browser Guard"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["antivirus","malware"]},
+        {"name": "SonicWall Capture Client", "provider": "SonicWall", "category": "Security", "description": "Enterprise-grade endpoint protection managed by our team.", "highlights": ["Managed by advisor","Rollback","DNS filtering","Cloud console"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["enterprise","firewall"]},
+
+        # ---- Backup & Storage ----
+        {"name": "Backblaze Computer Backup", "provider": "Backblaze", "category": "Backup & Storage", "description": "Unlimited personal computer backup to the cloud.", "highlights": ["Unlimited data","Version history","Mobile access"], "price_note": "Included in Pro/Business/VIP", "included_in_plans": ["Pro","Business","Lifetime VIP"], "tags": ["backup"]},
+        {"name": "iDrive Business", "provider": "iDrive", "category": "Backup & Storage", "description": "Team cloud backup with server and VM support.", "highlights": ["5 TB","Unlimited computers","Server + VM backup"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["backup","server"]},
+    ]
+
+    for idx, item in enumerate(software_catalog):
+        item["id"] = str(uuid.uuid4())
+        item["created_at"] = now_iso()
+        # simple icon hint for frontend
+        cat_icons = {
+            "AI Assistants": "Sparkles", "AI Creative": "Wand2", "AI Developer": "Code2",
+            "AI Productivity": "Zap", "Accounting": "Receipt", "Productivity": "Briefcase",
+            "CRM & Sales": "Users", "Website Development": "Globe", "Security": "ShieldCheck",
+            "Backup & Storage": "HardDrive",
+        }
+        item["icon"] = cat_icons.get(item["category"], "Package")
+        await db.software_catalog.insert_one(item.copy())
+
+    # ---- Sanford sample devices (PC info) ----
+    await db.devices.insert_one({
+        "id": str(uuid.uuid4()),
+        "customer_id": sandy["id"],
+        "name": "Sandy's Main Desktop",
+        "type": "Desktop PC",
+        "os": "Windows 11 Pro",
+        "manufacturer": "Dell",
+        "model": "OptiPlex 7090",
+        "serial": "DELL-7X8Z9A2",
+        "processor": "Intel Core i7-11700",
+        "ram": "32 GB DDR4",
+        "storage": "1 TB NVMe SSD + 2 TB HDD",
+        "notes": "Primary workstation — email, Outlook, QuickBooks. Protected by SonicWall Capture Client.",
+        "created_at": now_iso(), "updated_at": now_iso(),
+    })
+    await db.devices.insert_one({
+        "id": str(uuid.uuid4()),
+        "customer_id": sandy["id"],
+        "name": "Sandy's Laptop",
+        "type": "Laptop",
+        "os": "Windows 11 Home",
+        "manufacturer": "Lenovo",
+        "model": "ThinkPad T14s Gen 4",
+        "serial": "LNV-PF4C21ZB",
+        "processor": "Intel Core i7-1365U",
+        "ram": "16 GB LPDDR5",
+        "storage": "512 GB SSD",
+        "notes": "Travel laptop — VPN + Bitdefender installed.",
+        "created_at": now_iso(), "updated_at": now_iso(),
+    })
+
+    # ---- Sample software request from Sandy ----
+    sw_item = await db.software_catalog.find_one({"name": "QuickBooks Online Plus"}, {"_id": 0})
+    if sw_item:
+        await db.software_requests.insert_one({
+            "id": str(uuid.uuid4()),
+            "request_number": f"SR-{str(uuid.uuid4())[:8].upper()}",
+            "customer_id": sandy["id"],
+            "customer_name": sandy["name"],
+            "customer_email": sandy["email"],
+            "software_id": sw_item["id"],
+            "software_name": sw_item["name"],
+            "software_provider": sw_item["provider"],
+            "software_category": sw_item["category"],
+            "quantity": 1,
+            "reason": "Need QuickBooks for 2026 tax year — migrating from desktop version.",
+            "status": "approved",
+            "advisor_notes": "Approved. License key sent via encrypted email. Installation scheduled next Tuesday.",
+            "assigned_advisor_id": ravi["id"],
+            "created_at": now_iso(), "updated_at": now_iso(),
+        })
 
     logger.info("Seed complete.")
 

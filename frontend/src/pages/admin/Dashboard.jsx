@@ -24,6 +24,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart, Bar,
 } from 'recharts';
 import { toast } from 'sonner';
+import SoftwareRequests from './SoftwareRequests';
 
 const StatCard = ({ icon: Icon, label, value, tint = 'blue' }) => {
   const tints = { blue: 'bg-blue-50 text-[#0B3B82] border-blue-100', green: 'bg-green-50 text-green-700 border-green-100', amber: 'bg-amber-50 text-amber-700 border-amber-100', rose: 'bg-rose-50 text-rose-700 border-rose-100' };
@@ -491,6 +492,7 @@ export default function AdminDashboard() {
         <Route path="invoices" element={<Invoices />} />
         <Route path="payments" element={<Payments />} />
         <Route path="tickets" element={<Tickets />} />
+        <Route path="software-requests" element={<SoftwareRequests />} />
         <Route path="plans" element={<Plans />} />
         <Route path="bookings" element={<Bookings />} />
         <Route path="contact" element={<Contact />} />

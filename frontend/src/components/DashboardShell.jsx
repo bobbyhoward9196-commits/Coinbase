@@ -5,12 +5,14 @@ import { Button } from './ui/button';
 import {
   LayoutDashboard, LogOut, Menu, X, Calendar, FileText, MessageSquare,
   Settings, Users, Wrench, BarChart3, TicketCheck, UserCog, ClipboardList,
-  CreditCard, DollarSign, BookOpen, Package
+  CreditCard, DollarSign, BookOpen, Package, Sparkles, Monitor
 } from 'lucide-react';
 
 const customerLinks = [
   { to: '/dashboard', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/dashboard/appointments', label: 'Appointments', icon: Calendar },
+  { to: '/dashboard/software', label: 'Software & Apps', icon: Sparkles },
+  { to: '/dashboard/devices', label: 'My Devices', icon: Monitor },
   { to: '/dashboard/invoices', label: 'Invoices & Payments', icon: FileText },
   { to: '/dashboard/history', label: 'Service History', icon: ClipboardList },
   { to: '/dashboard/tickets', label: 'Support Tickets', icon: TicketCheck },
@@ -34,6 +36,7 @@ const adminLinks = [
   { to: '/admin/invoices', label: 'Invoices', icon: FileText },
   { to: '/admin/payments', label: 'Payments', icon: DollarSign },
   { to: '/admin/tickets', label: 'Support Tickets', icon: TicketCheck },
+  { to: '/admin/software-requests', label: 'Software Requests', icon: Sparkles },
   { to: '/admin/plans', label: 'Plans & Pricing', icon: Package },
   { to: '/admin/bookings', label: 'Bookings', icon: BookOpen },
   { to: '/admin/contact', label: 'Contact Messages', icon: MessageSquare },

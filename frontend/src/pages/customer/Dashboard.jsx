@@ -23,6 +23,8 @@ import {
   Calendar, CreditCard, Star, Phone, Mail, Plus, Download, Send, MessageSquare, Shield, ClipboardList, TicketCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import Software from './Software';
+import Devices from './Devices';
 
 const StatCard = ({ icon: Icon, label, value, hint, tint = 'blue' }) => {
   const tints = {
@@ -525,6 +527,8 @@ export default function CustomerDashboard() {
       <Route element={<DashboardShell role="customer" />}>
         <Route index element={<Overview />} />
         <Route path="appointments" element={<Appointments />} />
+        <Route path="software" element={<Software />} />
+        <Route path="devices" element={<Devices />} />
         <Route path="invoices" element={<Invoices />} />
         <Route path="history" element={<History />} />
         <Route path="tickets" element={<Tickets />} />

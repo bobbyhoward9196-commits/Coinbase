@@ -89,13 +89,6 @@ export default function Login() {
                 <Link to="/register" className="font-semibold text-[#0B3B82] hover:underline" data-testid="register-link">Create an account</Link>
               </p>
             )}
-
-            <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-600 space-y-1">
-              <div className="font-semibold text-slate-700">Test access (for review):</div>
-              <div>Admin: admin@globaltechsolutions.com / Admin@123</div>
-              <div>Technician: ravi@globaltechsolutions.com / Tech@123</div>
-              <div>Customer: bsandy2@aol.com / Welcome@2026</div>
-            </div>
           </CardContent>
         </Card>
       </div>
