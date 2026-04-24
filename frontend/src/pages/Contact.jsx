@@ -36,7 +36,7 @@ export default function Contact() {
       <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-14 grid lg:grid-cols-5 gap-10">
         <div className="lg:col-span-2 space-y-6">
           {[
-            { icon: Phone, t: 'Call us', lines: ['1-800-741-800', 'Mon–Fri 8am–8pm ET'] },
+            { icon: Phone, t: 'Call us', lines: ['1-800-592-5935', 'Mon–Fri 8am–8pm ET'] },
             { icon: Mail, t: 'Email us', lines: ['support@globaltechsolutions.com', 'billing@globaltechsolutions.com'] },
             { icon: Clock, t: 'Emergency support', lines: ['24/7 hotline for existing customers', 'Average response in 6 minutes'] },
             { icon: MapPin, t: 'Where we operate', lines: ['Headquartered in the United States', 'Nationwide remote · on-site in tri-state area'] },

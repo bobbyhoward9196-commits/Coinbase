@@ -10,6 +10,7 @@ import {
 
 const customerLinks = [
   { to: '/dashboard', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/dashboard/active', label: 'Active Services', icon: ShieldCheck },
   { to: '/dashboard/appointments', label: 'Appointments', icon: Calendar },
   { to: '/dashboard/software', label: 'Software & Apps', icon: Sparkles },
   { to: '/dashboard/devices', label: 'My Devices', icon: Monitor },

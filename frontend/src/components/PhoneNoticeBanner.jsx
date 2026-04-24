@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, Phone } from 'lucide-react';
 
-const DISMISS_KEY = 'gts_phone_notice_dismissed_v1';
+const DISMISS_KEY = 'gts_phone_notice_dismissed_v2';
 
 export default function PhoneNoticeBanner() {
   const [open, setOpen] = useState(false);
@@ -27,8 +27,8 @@ export default function PhoneNoticeBanner() {
           <strong>Phone number update:</strong> Our official support line has changed from
           <span className="mx-1 line-through text-amber-700">844-331-2777</span>
           to
-          <a href="tel:18007418000" className="mx-1 font-bold underline decoration-amber-600 underline-offset-2 hover:text-[#0B3B82]" data-testid="new-phone-number">
-            1-800-741-800
+          <a href="tel:18005925935" className="mx-1 font-bold underline decoration-amber-600 underline-offset-2 hover:text-[#0B3B82]" data-testid="new-phone-number">
+            1-800-592-5935
           </a>
           . Please update your contacts.
         </div>

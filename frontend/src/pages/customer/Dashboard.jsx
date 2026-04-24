@@ -25,6 +25,7 @@ import {
 import { toast } from 'sonner';
 import Software from './Software';
 import Devices from './Devices';
+import ActiveServices from './ActiveServices';
 import ScanEmbed from '../Scan';
 
 const ScanRoute = () => <ScanEmbed embedded />;
@@ -130,6 +131,13 @@ const Overview = () => {
                 <Button asChild className="w-full mt-4 bg-[#0B3B82] hover:bg-[#0a3270]" data-testid="chat-tech-btn">
                   <Link to={`/dashboard/messages?with=${tech.id}`}><MessageSquare className="h-4 w-4 mr-2" /> Message technician</Link>
                 </Button>
+                {tech.phone && (
+                  <Button asChild variant="outline" className="w-full mt-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50" data-testid="call-tech-btn">
+                    <a href={`tel:${tech.phone.replace(/[^\d+]/g, '')}`}>
+                      <Phone className="h-4 w-4 mr-2" /> Call {tech.phone}
+                    </a>
+                  </Button>
+                )}
               </div>
             ) : <p className="mt-4 text-sm text-slate-500">No technician assigned yet.</p>}
           </CardContent>
@@ -539,6 +547,7 @@ export default function CustomerDashboard() {
         <Route index element={<Overview />} />
         <Route path="appointments" element={<Appointments />} />
         <Route path="software" element={<Software />} />
+        <Route path="active" element={<ActiveServices />} />
         <Route path="devices" element={<Devices />} />
         <Route path="scan" element={<ScanRoute />} />
         <Route path="invoices" element={<Invoices />} />
