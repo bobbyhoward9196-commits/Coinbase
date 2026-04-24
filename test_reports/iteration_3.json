@@ -1,0 +1,46 @@
+{
+  "summary": "OTP/2FA feature tested end-to-end. 15/15 backend tests pass (login role-gating, verify-otp happy/wrong/expired/lockout/consumed, resend-otp for customer/admin/tech/unknown, register bypass, regression on dashboard endpoints post-OTP). 6/6 frontend flows pass (admin & technician direct login, customer OTP step render with masked email + 6 inputs + 30s resend cooldown, OTP extracted from backend stderr log and successfully verified, back-to-sign-in button, navigation to /dashboard). Resend email fails as expected in test mode (domain not verified) — the OTP code is logged and the full flow still works.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/verify-otp", "issue": "When OTP is correct, response omits OTP consumed event in audit log. Low priority."},
+      {"endpoint": "POST /api/auth/resend-otp", "issue": "No rate-limiting at API level — frontend enforces 30s cooldown but backend will happily re-issue OTP on each call. Could be abused to spam a customer's inbox (though Resend test-mode blocks delivery). Recommend server-side throttle (e.g., min 20s between issues)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_otp_auth.py",
+    "/app/test_reports/pytest/otp_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Add backend-side resend throttle on /api/auth/resend-otp (e.g., 20-30s between issues by email) so the cooldown isn't purely client-side.",
+    "(Optional) When Resend fails in test mode, consider returning a dev-only flag in the login response (e.g., only when DEBUG=True) so automated tests don't have to grep log files. Not required — current log-based extraction works.",
+    "Verify a custom Resend sender domain in production so OTPs actually deliver to customer inboxes — currently the email send to bsandy2@aol.com fails because onboarding@resend.dev can only mail the account owner."
+  ],
+  "critical_code_review_comments": [
+    "server.py _issue_otp correctly delete_many's prior OTPs before inserting a new one — prevents stale codes from validating.",
+    "verify_otp: remaining attempts message uses record.get('attempts',0)+1 AFTER the $inc. Since the read is pre-increment, the math is correct (OTP_MAX_ATTEMPTS - new_attempts).",
+    "verify_otp accepts body.otp.strip() — good (handles trailing spaces from paste).",
+    "resend_otp for non-existent email returns {ok:true} — correct (no info leak).",
+    "Login masking logic: local[:2]+'***'+local[-1:] works for Sandy ('bs***2@aol.com'). For 3-char local parts it drops to local[0]+'***' — fine.",
+    "JWT_SECRET has a default fallback in code. Low-risk but prefer failing hard when env not set (or at least warn on startup).",
+    "bcrypt-hashing a 6-digit OTP is slow (~100ms each). Currently only one verify per attempt — acceptable. Under lockout-bypass scenarios, attempt throttling is still needed.",
+    "expires_at stored as BSON datetime; parsing handles both str and datetime — robust.",
+    "Frontend Login.jsx: resend cooldown is only client-side; if user refreshes the /login page mid-flow the 30s resets (low severity because server accepts any resend).",
+    "AuthContext.verifyOtp / resendOtp correctly don't set the session until verify succeeds — no token stored during OTP step. Good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_otp_auth.py"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% (6/6 OTP flows)"},
+  "test_credentials": "admin@globaltechsolutions.com/Admin@123 (no OTP), mike@globaltechsolutions.com/Tech@123 (no OTP), bsandy2@aol.com/Welcome@2026 (OTP required — extracted from /var/log/supervisor/backend.err.log 'DEV OTP for <email>: NNNNNN')",
+  "seed_data_creation": "Test cleanup deletes its own auth_otps entries per test and also deletes one TEST_otpreg_<ts>@example.com user at end. No persistent seed added.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Full OTP coverage is in /app/backend/tests/test_otp_auth.py. To test the customer portal post-OTP, extract the code with: grep -oE 'DEV OTP for <email>: [0-9]{6}' /var/log/supervisor/backend.err.log | tail -1 | grep -oE '[0-9]{6}$'. All existing customer/admin/technician endpoints still work after the OTP gate. Mongo collection 'auth_otps' holds hashed codes with expires_at; delete_many on login/resend/success.",
+  "rca_of_the_issue": "No bugs found. Feature works as specified. Only improvements are nice-to-haves (server-side resend throttle, verified Resend domain for production email delivery)."
+}

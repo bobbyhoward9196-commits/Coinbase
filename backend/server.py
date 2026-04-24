@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+import random
+import resend
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -27,6 +29,14 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ.get('JWT_SECRET', 'gts-super-secret-key-change-in-prod-2026')
 JWT_ALGORITHM = 'HS256'
 JWT_EXP_HOURS = 24 * 7
+
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+RESEND_FROM_EMAIL = os.environ.get('RESEND_FROM_EMAIL', 'onboarding@resend.dev')
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+
+OTP_EXPIRY_MINUTES = 5
+OTP_MAX_ATTEMPTS = 5
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
@@ -75,6 +85,75 @@ def require_role(*roles):
         return user
     return checker
 
+# ----------------------- OTP Helpers -----------------------
+def _generate_otp() -> str:
+    return f"{random.randint(0, 999999):06d}"
+
+def _otp_email_html(name: str, code: str) -> str:
+    return f"""
+    <div style="font-family: -apple-system, 'Segoe UI', Arial, sans-serif; max-width: 560px; margin: 0 auto; background: #f8fafc; padding: 0;">
+      <div style="background: linear-gradient(135deg, #0B3B82 0%, #1e3a8a 100%); padding: 32px 24px; text-align: center;">
+        <div style="color: #ffffff; font-size: 14px; letter-spacing: 3px; font-weight: 600;">GLOBAL TECH SOLUTIONS</div>
+        <div style="color: #cbd5e1; font-size: 11px; letter-spacing: 6px; margin-top: 4px;">S E C U R E &nbsp; L O G I N</div>
+      </div>
+      <div style="background: #ffffff; padding: 36px 28px; border: 1px solid #e2e8f0; border-top: none;">
+        <h2 style="color: #0f172a; font-size: 22px; margin: 0 0 8px 0;">Hi {name},</h2>
+        <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px 0;">
+          Use the verification code below to finish signing in to your Global Tech Solutions account.
+        </p>
+        <div style="background: #f1f5f9; border: 2px dashed #0B3B82; border-radius: 10px; padding: 22px; text-align: center; margin: 20px 0;">
+          <div style="color: #64748b; font-size: 12px; letter-spacing: 2px; margin-bottom: 8px;">YOUR VERIFICATION CODE</div>
+          <div style="color: #0B3B82; font-size: 36px; font-weight: 800; letter-spacing: 10px; font-family: 'Courier New', monospace;">{code}</div>
+        </div>
+        <p style="color: #475569; font-size: 14px; line-height: 1.6; margin: 20px 0 0 0;">
+          This code expires in <strong>{OTP_EXPIRY_MINUTES} minutes</strong>. If you did not request this, please ignore this email and your password will remain safe.
+        </p>
+        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 28px 0 20px;" />
+        <p style="color: #94a3b8; font-size: 12px; margin: 0;">
+          Need help? Call us 24/7 at <a href="tel:18005925935" style="color: #0B3B82; text-decoration: none; font-weight: 600;">1-800-592-5935</a>.
+        </p>
+      </div>
+      <div style="text-align: center; padding: 16px; color: #94a3b8; font-size: 11px;">
+        © {datetime.now().year} Global Tech Solutions · Confidential
+      </div>
+    </div>
+    """
+
+async def _send_otp_email(to_email: str, name: str, code: str) -> bool:
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not set — skipping OTP email send. Code=%s for %s", code, to_email)
+        return False
+    try:
+        resend.Emails.send({
+            "from": f"Global Tech Solutions <{RESEND_FROM_EMAIL}>",
+            "to": [to_email],
+            "subject": f"Your Global Tech login code: {code}",
+            "html": _otp_email_html(name, code),
+        })
+        logger.info("OTP email sent to %s", to_email)
+        return True
+    except Exception as e:
+        # Resend test-mode limitation: only owner email allowed until domain is verified.
+        # Log the code prominently so the flow can still be completed during development.
+        logger.error("Failed to send OTP email to %s: %s", to_email, e)
+        logger.warning("=== DEV OTP for %s: %s === (email delivery failed; verify a Resend domain to send to other addresses)", to_email, code)
+        return False
+
+async def _issue_otp(user: dict) -> str:
+    code = _generate_otp()
+    await db.auth_otps.delete_many({"email": user["email"]})
+    await db.auth_otps.insert_one({
+        "id": str(uuid.uuid4()),
+        "email": user["email"],
+        "user_id": user["id"],
+        "otp_hash": hash_password(code),
+        "attempts": 0,
+        "created_at": datetime.now(timezone.utc),
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES),
+    })
+    await _send_otp_email(user["email"], user.get("name", "there"), code)
+    return code
+
 # ----------------------- Models -----------------------
 class RegisterInput(BaseModel):
     name: str
@@ -87,6 +166,13 @@ class LoginInput(BaseModel):
     email: EmailStr
     password: str
     role: Optional[str] = None  # customer / technician / admin (optional hint)
+
+class VerifyOTPInput(BaseModel):
+    email: EmailStr
+    otp: str
+
+class ResendOTPInput(BaseModel):
+    email: EmailStr
 
 class ContactForm(BaseModel):
     name: str
@@ -182,10 +268,71 @@ async def login(body: LoginInput):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if body.role and user["role"] != body.role:
         raise HTTPException(status_code=403, detail=f"This account is not a {body.role} account")
+
+    # 2FA / OTP required only for customer role
+    if user["role"] == "customer":
+        await _issue_otp(user)
+        # Mask email for UI display
+        local, _, dom = user["email"].partition("@")
+        masked = (local[:2] + "***" + local[-1:] if len(local) > 3 else local[0] + "***") + "@" + dom
+        return {
+            "otp_required": True,
+            "email": user["email"],
+            "masked_email": masked,
+            "message": f"We sent a 6-digit verification code to {masked}. It expires in {OTP_EXPIRY_MINUTES} minutes.",
+        }
+
+    # Admin / Technician: direct token
     token = create_token(user["id"], user["role"], user["email"])
     user.pop("password", None)
     user.pop("_id", None)
     return {"token": token, "user": user}
+
+@api.post("/auth/verify-otp")
+async def verify_otp(body: VerifyOTPInput):
+    email = body.email.lower()
+    record = await db.auth_otps.find_one({"email": email}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=400, detail="No verification code found. Please sign in again.")
+    # Expiry check
+    exp = record["expires_at"]
+    if isinstance(exp, str):
+        exp = datetime.fromisoformat(exp)
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > exp:
+        await db.auth_otps.delete_many({"email": email})
+        raise HTTPException(status_code=400, detail="Verification code expired. Please sign in again.")
+    # Attempts check
+    if record.get("attempts", 0) >= OTP_MAX_ATTEMPTS:
+        await db.auth_otps.delete_many({"email": email})
+        raise HTTPException(status_code=429, detail="Too many incorrect attempts. Please sign in again.")
+    # Verify
+    if not verify_password(body.otp.strip(), record["otp_hash"]):
+        await db.auth_otps.update_one({"email": email}, {"$inc": {"attempts": 1}})
+        remaining = OTP_MAX_ATTEMPTS - (record.get("attempts", 0) + 1)
+        raise HTTPException(status_code=400, detail=f"Invalid verification code. {remaining} attempt(s) remaining.")
+    # Success
+    user = await db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.auth_otps.delete_many({"email": email})
+    token = create_token(user["id"], user["role"], user["email"])
+    user.pop("password", None)
+    user.pop("_id", None)
+    return {"token": token, "user": user}
+
+@api.post("/auth/resend-otp")
+async def resend_otp(body: ResendOTPInput):
+    email = body.email.lower()
+    user = await db.users.find_one({"email": email})
+    if not user:
+        # Do not reveal existence — just return success
+        return {"ok": True}
+    if user["role"] != "customer":
+        raise HTTPException(status_code=400, detail="OTP not required for this account")
+    await _issue_otp(user)
+    return {"ok": True, "message": "A new code has been sent."}
 
 @api.get("/auth/me")
 async def me(user=Depends(get_current_user)):
