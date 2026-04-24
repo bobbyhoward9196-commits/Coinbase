@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/button';
+import PhoneNoticeBanner from './PhoneNoticeBanner';
 import {
   Shield, Menu, X, Headphones, LogOut, User, LayoutDashboard, Phone
 } from 'lucide-react';
@@ -62,8 +63,8 @@ export const Navbar = () => {
         </nav>
 
         <div className="hidden items-center gap-2 lg:flex">
-          <a href="tel:18005550100" className="hidden xl:flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-[#0B3B82] mr-2" data-testid="nav-phone">
-            <Phone className="h-4 w-4" /> 1-800-555-0100
+          <a href="tel:18007418000" className="hidden xl:flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-[#0B3B82] mr-2" data-testid="nav-phone">
+            <Phone className="h-4 w-4" /> 1-800-741-800
           </a>
 
           {user ? (
@@ -196,7 +197,7 @@ export const Footer = () => (
         <div>
           <h4 className="font-display text-sm font-semibold text-white uppercase tracking-wider">Get in touch</h4>
           <ul className="mt-4 space-y-3 text-sm">
-            <li className="flex items-center gap-2"><Phone className="h-4 w-4 text-blue-400" /> 1-800-555-0100</li>
+            <li className="flex items-center gap-2"><Phone className="h-4 w-4 text-blue-400" /> 1-800-741-800</li>
             <li className="flex items-center gap-2"><Headphones className="h-4 w-4 text-blue-400" /> 24/7 Emergency line</li>
             <li className="text-slate-400 text-xs">United States · Serving homes & SMBs</li>
           </ul>
@@ -225,6 +226,7 @@ export const Footer = () => (
 
 export const PublicLayout = ({ children }) => (
   <div className="min-h-screen flex flex-col bg-white">
+    <PhoneNoticeBanner />
     <Navbar />
     <main className="flex-1">{children}</main>
     <Footer />

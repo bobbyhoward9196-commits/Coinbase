@@ -57,14 +57,17 @@ const SoftwareLogo = ({ item, size = 40 }) => {
 export default function CustomerSoftware() {
   const [catalog, setCatalog] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [allowance, setAllowance] = useState({ allowance: 0, used: 0, remaining: 0, source: '' });
   const [query, setQuery] = useState('');
   const [activeCat, setActiveCat] = useState('all');
   const [selected, setSelected] = useState(null);
+  const [selectedMode, setSelectedMode] = useState('gift'); // 'gift' or 'request'
   const [reqForm, setReqForm] = useState({ quantity: 1, reason: '' });
 
   const load = () => {
     api.get('/software-catalog').then(r => setCatalog(r.data));
     api.get('/software-requests').then(r => setRequests(r.data));
+    api.get('/software-gifts/allowance').then(r => setAllowance(r.data)).catch(() => {});
   };
   useEffect(() => { load(); }, []);
 
@@ -78,14 +81,21 @@ export default function CustomerSoftware() {
   const userRequests = requests.filter(r => !r.is_gift);
   const activeReq = (softwareId) => requests.find(r => r.software_id === softwareId && ['pending','under_review','approved','delivered'].includes(r.status));
 
-  const openRequest = (item) => { setSelected(item); setReqForm({ quantity: 1, reason: '' }); };
-  const submitRequest = async () => {
+  const openClaim = (item) => { setSelected(item); setSelectedMode('gift'); setReqForm({ quantity: 1, reason: '' }); };
+  const openRequest = (item) => { setSelected(item); setSelectedMode('request'); setReqForm({ quantity: 1, reason: '' }); };
+
+  const submit = async () => {
     try {
-      await api.post('/software-requests', { software_id: selected.id, quantity: parseInt(reqForm.quantity) || 1, reason: reqForm.reason });
-      toast.success('Request submitted — your advisor will follow up shortly.');
+      if (selectedMode === 'gift') {
+        await api.post('/software-gifts/claim', { software_id: selected.id, reason: reqForm.reason });
+        toast.success(`${selected.name} claimed as loyalty gift. License will be emailed within 24 hours.`);
+      } else {
+        await api.post('/software-requests', { software_id: selected.id, quantity: parseInt(reqForm.quantity) || 1, reason: reqForm.reason });
+        toast.success('Request submitted — your advisor will follow up shortly.');
+      }
       setSelected(null); load();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to submit request');
+      toast.error(err.response?.data?.detail || 'Failed');
     }
   };
 
@@ -99,8 +109,8 @@ export default function CustomerSoftware() {
         </p>
       </div>
 
-      {/* Loyalty gifts */}
-      {gifts.length > 0 && (
+      {/* Loyalty allowance */}
+      {allowance.allowance > 0 && (
         <Card className="border-emerald-200 bg-gradient-to-br from-emerald-50 to-white" data-testid="loyalty-gifts-section">
           <CardContent className="p-6">
             <div className="flex items-start justify-between flex-wrap gap-3">
@@ -109,34 +119,51 @@ export default function CustomerSoftware() {
                   <Gift className="h-5 w-5 text-emerald-700" />
                 </div>
                 <div>
-                  <h3 className="font-display font-bold text-lg text-slate-900">Your loyalty gift bundle</h3>
+                  <h3 className="font-display font-bold text-lg text-slate-900">Your loyalty gift allowance</h3>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    Granted by Global Tech Solutions as a thank-you for your continued trust · delivered {gifts[0]?.gifted_at ? new Date(gifts[0].gifted_at).toLocaleDateString() : 'recently'}.
+                    {allowance.source || 'Included with your plan'} — pick any {allowance.allowance} premium subscriptions from the catalog below.
                   </p>
                 </div>
               </div>
-              <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">{gifts.length} subscriptions included</Badge>
+              <div className="flex items-center gap-4">
+                <div className="text-center">
+                  <div className="font-display font-bold text-2xl text-emerald-700" data-testid="gift-remaining">{allowance.remaining}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider">Remaining</div>
+                </div>
+                <div className="h-10 w-px bg-slate-200" />
+                <div className="text-center">
+                  <div className="font-display font-bold text-2xl text-slate-500">{allowance.used}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider">Claimed</div>
+                </div>
+                <div className="h-10 w-px bg-slate-200" />
+                <div className="text-center">
+                  <div className="font-display font-bold text-2xl text-slate-900">{allowance.allowance}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider">Total</div>
+                </div>
+              </div>
             </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {gifts.map(g => {
-                const sw = catalog.find(c => c.id === g.software_id);
-                const display = sw || { name: g.software_name, icon: 'Package', logo_domain: null, category: g.software_category };
-                return (
-                  <div key={g.id} className="rounded-lg border border-emerald-200 bg-white p-3 flex items-center gap-3" data-testid={`gift-${g.id}`}>
-                    <SoftwareLogo item={display} size={38} />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold text-slate-900 truncate">{g.software_name}</div>
-                      <div className="text-[11px] text-slate-500 truncate">{g.software_provider}</div>
+
+            {gifts.length > 0 ? (
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {gifts.map(g => {
+                  const sw = catalog.find(c => c.id === g.software_id);
+                  const display = sw || { name: g.software_name, icon: 'Package', logo_domain: null, category: g.software_category };
+                  return (
+                    <div key={g.id} className="rounded-lg border border-emerald-200 bg-white p-3 flex items-center gap-3" data-testid={`gift-${g.id}`}>
+                      <SoftwareLogo item={display} size={38} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-slate-900 truncate">{g.software_name}</div>
+                        <div className="text-[11px] text-slate-500 truncate">Claimed {new Date(g.gifted_at).toLocaleDateString()}</div>
+                      </div>
+                      <Gift className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                     </div>
-                    <Gift className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                  </div>
-                );
-              })}
-            </div>
-            {gifts[0]?.advisor_notes && (
-              <p className="mt-5 text-sm text-slate-700 p-3 rounded-md bg-white border border-emerald-200 italic">
-                {gifts[0].advisor_notes}
-              </p>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="mt-5 rounded-md border border-dashed border-emerald-300 bg-white/60 p-5 text-center text-sm text-slate-600">
+                You haven't claimed any gifts yet. Browse the catalog and pick {allowance.allowance} premium subscriptions that work for you — use the <strong className="text-emerald-700">Claim as gift</strong> button on any item.
+              </div>
             )}
           </CardContent>
         </Card>
@@ -201,9 +228,16 @@ export default function CustomerSoftware() {
                       {req.status.replace('_', ' ')}
                     </Badge>
                   ) : (
-                    <Button size="sm" onClick={() => openRequest(item)} className="bg-[#0B3B82] hover:bg-[#0a3270]" data-testid={`request-${item.id}`}>
-                      <Send className="h-3.5 w-3.5 mr-1" /> Request
-                    </Button>
+                    <div className="flex gap-1.5">
+                      {allowance.remaining > 0 && (
+                        <Button size="sm" onClick={() => openClaim(item)} className="bg-emerald-600 hover:bg-emerald-700 text-white" data-testid={`claim-${item.id}`}>
+                          <Gift className="h-3.5 w-3.5 mr-1" /> Claim
+                        </Button>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => openRequest(item)} data-testid={`request-${item.id}`}>
+                        <Send className="h-3.5 w-3.5 mr-1" /> Request
+                      </Button>
+                    </div>
                   )}
                 </div>
               </CardContent>
@@ -263,13 +297,15 @@ export default function CustomerSoftware() {
         </CardContent>
       </Card>
 
-      {/* Request dialog */}
+      {/* Request / Claim dialog */}
       <Dialog open={!!selected} onOpenChange={(v) => !v && setSelected(null)}>
         <DialogContent className="sm:max-w-lg">
           {selected && (
             <>
               <DialogHeader>
-                <DialogTitle>Request {selected.name}</DialogTitle>
+                <DialogTitle className="flex items-center gap-2">
+                  {selectedMode === 'gift' ? <><Gift className="h-5 w-5 text-emerald-600" /> Claim as loyalty gift</> : <>Request {selected.name}</>}
+                </DialogTitle>
               </DialogHeader>
               <div className="flex items-center gap-3 text-sm text-slate-600">
                 <SoftwareLogo item={selected} size={48} />
@@ -279,14 +315,24 @@ export default function CustomerSoftware() {
                 </div>
               </div>
               <p className="text-sm text-slate-600">{selected.description}</p>
-              <p className="text-xs text-slate-500">{selected.price_note}</p>
+              {selectedMode === 'gift' ? (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-slate-700">
+                  This will use <strong>1 of your {allowance.remaining} remaining</strong> loyalty gift slots. License key / invite will be emailed within 24 hours.
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">{selected.price_note}</p>
+              )}
               <div className="space-y-3 mt-2">
-                <div><Label>Quantity / seats</Label><Input type="number" min="1" value={reqForm.quantity} onChange={e => setReqForm({ ...reqForm, quantity: e.target.value })} className="mt-1.5" data-testid="request-quantity" /></div>
-                <div><Label>Why do you need it? (optional)</Label><Textarea rows={3} value={reqForm.reason} onChange={e => setReqForm({ ...reqForm, reason: e.target.value })} placeholder="e.g., Need for 2026 tax year" className="mt-1.5" data-testid="request-reason" /></div>
+                {selectedMode === 'request' && (
+                  <div><Label>Quantity / seats</Label><Input type="number" min="1" value={reqForm.quantity} onChange={e => setReqForm({ ...reqForm, quantity: e.target.value })} className="mt-1.5" data-testid="request-quantity" /></div>
+                )}
+                <div><Label>Notes (optional)</Label><Textarea rows={3} value={reqForm.reason} onChange={e => setReqForm({ ...reqForm, reason: e.target.value })} placeholder={selectedMode === 'gift' ? 'Any setup preferences? (e.g., install on my desktop)' : 'e.g., Need for 2026 tax year'} className="mt-1.5" data-testid="request-reason" /></div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setSelected(null)}>Cancel</Button>
-                <Button onClick={submitRequest} className="bg-[#0B3B82] hover:bg-[#0a3270]" data-testid="request-submit">Submit request</Button>
+                <Button onClick={submit} className={selectedMode === 'gift' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-[#0B3B82] hover:bg-[#0a3270]'} data-testid="request-submit">
+                  {selectedMode === 'gift' ? 'Claim gift' : 'Submit request'}
+                </Button>
               </DialogFooter>
             </>
           )}

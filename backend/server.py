@@ -677,6 +677,58 @@ async def create_software_request(body: SoftwareRequestInput, user=Depends(get_c
     req.pop("_id", None)
     return req
 
+@api.post("/software-gifts/claim")
+async def claim_software_gift(body: SoftwareRequestInput, user=Depends(get_current_user)):
+    if user["role"] != "customer":
+        raise HTTPException(status_code=403, detail="Only customers can claim gifts")
+    sw = await db.software_catalog.find_one({"id": body.software_id}, {"_id": 0})
+    if not sw:
+        raise HTTPException(status_code=404, detail="Software not found")
+    allowance = int(user.get("gift_allowance") or 0)
+    used = await db.software_requests.count_documents({"customer_id": user["id"], "is_gift": True})
+    if used >= allowance:
+        raise HTTPException(status_code=400, detail=f"You have used all {allowance} loyalty gifts. Contact your advisor for an upgrade.")
+    already = await db.software_requests.find_one({"customer_id": user["id"], "software_id": sw["id"], "is_gift": True})
+    if already:
+        raise HTTPException(status_code=400, detail="You have already claimed this item as a gift.")
+    now = now_iso()
+    gift = {
+        "id": str(uuid.uuid4()),
+        "request_number": f"GFT-{str(uuid.uuid4())[:8].upper()}",
+        "customer_id": user["id"],
+        "customer_name": user["name"],
+        "customer_email": user["email"],
+        "software_id": sw["id"],
+        "software_name": sw["name"],
+        "software_provider": sw.get("provider"),
+        "software_category": sw.get("category"),
+        "quantity": 1,
+        "reason": body.reason or "",
+        "status": "delivered",
+        "is_gift": True,
+        "gifted_by": "Global Tech Solutions",
+        "gifted_at": now,
+        "advisor_notes": "🎁 Claimed from your loyalty gift allowance. License key / invite will be emailed within 24 hours.",
+        "assigned_advisor_id": user.get("assigned_technician_id"),
+        "created_at": now, "updated_at": now,
+    }
+    await db.software_requests.insert_one(gift.copy())
+    gift.pop("_id", None)
+    return gift
+
+@api.get("/software-gifts/allowance")
+async def gift_allowance(user=Depends(get_current_user)):
+    if user["role"] != "customer":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    allowance = int(user.get("gift_allowance") or 0)
+    used = await db.software_requests.count_documents({"customer_id": user["id"], "is_gift": True})
+    return {
+        "allowance": allowance,
+        "used": used,
+        "remaining": max(0, allowance - used),
+        "source": user.get("gift_allowance_source", ""),
+    }
+
 @api.patch("/software-requests/{rid}")
 async def update_software_request(rid: str, body: SoftwareRequestUpdate, user=Depends(get_current_user)):
     if user["role"] == "customer":
@@ -758,7 +810,7 @@ async def seed_if_empty():
 
     # ---- Technicians (real names from history + extras) ----
     tech_defs = [
-        {"name": "Mike Ungaro", "email": "mike@globaltechsolutions.com", "specialization": "Microsoft Ecosystem & Enterprise Support", "phone": "+1-800-555-0200", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1560250097-0b93528c311a?w=400&q=80", "certification": "Microsoft Certified", "certification_number": "#493919583919", "level": "Level 2 Technician", "joined_year": 2014, "bio": "Mike is a Microsoft Certified, Level 2 Technician who has been with Global Tech Solutions since 2014. He specializes in Microsoft Windows, Microsoft 365, Exchange, and enterprise endpoint management."},
+        {"name": "Mike Ungaro", "email": "mike@globaltechsolutions.com", "specialization": "Microsoft Ecosystem & Enterprise Support", "phone": "631-572-8941", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1560250097-0b93528c311a?w=400&q=80", "certification": "Microsoft Certified", "certification_number": "#493919583919", "level": "Level 2 Technician", "joined_year": 2014, "bio": "Mike is a Microsoft Certified, Level 2 Technician who has been with Global Tech Solutions since 2014. He specializes in Microsoft Windows, Microsoft 365, Exchange, and enterprise endpoint management."},
         {"name": "Ravi Ojha", "email": "ravi@globaltechsolutions.com", "specialization": "Network Security & Cybersecurity", "phone": "+1-800-555-0201", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?w=400&q=80", "certification": "CompTIA Security+ & Cisco CCNA", "certification_number": "#CS-2091745", "level": "Level 3 Technician", "joined_year": 2015, "bio": "Cybersecurity and network specialist — firewalls, VPNs, and crypto wallet protection."},
         {"name": "Sumit Kumar", "email": "sumit@globaltechsolutions.com", "specialization": "Endpoint Security & Firewalls", "phone": "+1-800-555-0202", "rating": 4.8, "photo": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80", "certification": "SonicWall SNSA & CompTIA Network+", "certification_number": "#SW-448120", "level": "Level 2 Technician", "joined_year": 2017, "bio": "SonicWall-certified specialist focused on firewalls, EDR, and endpoint hardening."},
         {"name": "Sonam Sharma", "email": "sonam@globaltechsolutions.com", "specialization": "Software & Email Support", "phone": "+1-800-555-0203", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=400&q=80", "certification": "Microsoft 365 Certified: Modern Desktop Administrator", "certification_number": "#MS-7781302", "level": "Level 2 Technician", "joined_year": 2018, "bio": "Email recovery, Microsoft 365, and productivity software specialist."},
@@ -936,6 +988,10 @@ async def seed_if_empty():
 
     # ---- Services catalog ----
     services = [
+        {"id": str(uuid.uuid4()), "slug": "crypto-protection", "title": "Crypto Wallet Protection", "icon": "Bitcoin", "desc": "Hardware-wallet setup, seed-phrase vaulting, MFA, and isolated device hardening. Protects MetaMask, Ledger, Trezor, and exchange accounts.", "featured": True, "category": "Crypto"},
+        {"id": str(uuid.uuid4()), "slug": "crypto-insurance", "title": "Crypto Insurance Coverage", "icon": "ShieldCheck", "desc": "Coverage against wallet compromise, phishing, and SIM-swap theft through our insurance partners. Up to $100,000 per incident for VIP members.", "featured": True, "category": "Crypto"},
+        {"id": str(uuid.uuid4()), "slug": "crypto-expert", "title": "Crypto Expert Direct Access", "icon": "UserCheck", "desc": "Direct line to a certified crypto security expert for audits, wallet reviews, and recovery. Priority 24/7 response for VIP clients.", "featured": True, "category": "Crypto"},
+        {"id": str(uuid.uuid4()), "slug": "crypto-recovery", "title": "Crypto Recovery & Forensics", "icon": "Search", "desc": "Assist with forensic tracing, exchange communication, and recovery process for stolen or mis-sent crypto (case-by-case).", "featured": True, "category": "Crypto"},
         {"id": str(uuid.uuid4()), "slug": "computer-repair", "title": "Computer Repair & Troubleshooting", "icon": "Laptop", "desc": "Desktop and laptop diagnostics, hardware repair, OS reinstall, performance tuning for Windows and Mac."},
         {"id": str(uuid.uuid4()), "slug": "phone-tablet", "title": "Phone & Tablet Support", "icon": "Smartphone", "desc": "iPhone, iPad, and Android setup, backup, data transfer, screen and battery recommendations."},
         {"id": str(uuid.uuid4()), "slug": "email-setup", "title": "Email Setup & Recovery", "icon": "Mail", "desc": "Gmail, Outlook, AOL, Yahoo, and business email setup, account recovery, migration, and sync."},
@@ -1106,44 +1162,10 @@ async def seed_if_empty():
         "created_at": now_iso(), "updated_at": now_iso(),
     })
 
-    # ---- Sandy's Loyalty Gift Bundle (granted by admin yesterday, not requested by customer) ----
-    gift_names = [
-        "ChatGPT Plus",
-        "Claude Pro",
-        "Microsoft 365 Business Standard",
-        "QuickBooks Online Plus",
-        "Adobe Creative Cloud All Apps",
-        "1Password Business",
-        "SonicWall Capture Client",
-        "Backblaze Computer Backup",
-        "TurboTax Premier",
-        "NordVPN Plus",
-    ]
-    gifted_at = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    for name in gift_names:
-        sw = await db.software_catalog.find_one({"name": name}, {"_id": 0})
-        if not sw:
-            continue
-        await db.software_requests.insert_one({
-            "id": str(uuid.uuid4()),
-            "request_number": f"GFT-{str(uuid.uuid4())[:8].upper()}",
-            "customer_id": sandy["id"],
-            "customer_name": sandy["name"],
-            "customer_email": sandy["email"],
-            "software_id": sw["id"],
-            "software_name": sw["name"],
-            "software_provider": sw.get("provider"),
-            "software_category": sw.get("category"),
-            "quantity": 1,
-            "reason": "",
-            "status": "delivered",
-            "is_gift": True,
-            "gifted_by": "Global Tech Solutions (Admin)",
-            "gifted_at": gifted_at,
-            "advisor_notes": "🎁 Loyalty gift for 8+ years as a Global Tech Solutions customer. License keys have been sent to your email and configured on file. Enjoy!",
-            "assigned_advisor_id": mike["id"],
-            "created_at": gifted_at, "updated_at": gifted_at,
-        })
+    # ---- Sandy's Loyalty Gift Allowance (he chooses himself) ----
+    # As a Lifetime VIP customer he's entitled to 10 premium software subscriptions
+    # he can pick from the catalog whenever he wants.
+    await db.users.update_one({"id": sandy["id"]}, {"$set": {"gift_allowance": 10, "gift_allowance_source": "Lifetime VIP loyalty benefit"}})
 
     logger.info("Seed complete.")
 
