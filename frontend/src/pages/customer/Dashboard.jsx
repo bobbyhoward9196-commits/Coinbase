@@ -116,6 +116,14 @@ const Overview = () => {
                   <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-slate-400" />{tech.phone}</div>
                   <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 text-slate-400" />{tech.email}</div>
                 </div>
+                {(tech.certification || tech.level || tech.joined_year) && (
+                  <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/60 p-3 space-y-1 text-xs">
+                    {tech.certification && <div className="flex justify-between gap-2"><span className="text-slate-500">Certification</span><span className="font-semibold text-slate-900 text-right">{tech.certification}</span></div>}
+                    {tech.certification_number && <div className="flex justify-between gap-2"><span className="text-slate-500">Cert #</span><span className="font-mono text-slate-900">{tech.certification_number}</span></div>}
+                    {tech.level && <div className="flex justify-between gap-2"><span className="text-slate-500">Level</span><span className="font-semibold text-slate-900">{tech.level}</span></div>}
+                    {tech.joined_year && <div className="flex justify-between gap-2"><span className="text-slate-500">Joined</span><span className="font-semibold text-slate-900">{tech.joined_year}</span></div>}
+                  </div>
+                )}
                 <Button asChild className="w-full mt-4 bg-[#0B3B82] hover:bg-[#0a3270]" data-testid="chat-tech-btn">
                   <Link to={`/dashboard/messages?with=${tech.id}`}><MessageSquare className="h-4 w-4 mr-2" /> Message technician</Link>
                 </Button>

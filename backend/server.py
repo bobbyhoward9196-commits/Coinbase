@@ -758,10 +758,11 @@ async def seed_if_empty():
 
     # ---- Technicians (real names from history + extras) ----
     tech_defs = [
-        {"name": "Ravi Ojha", "email": "ravi@globaltechsolutions.com", "specialization": "Network Security & Cybersecurity", "phone": "+1-800-555-0201", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?w=400&q=80"},
-        {"name": "Sumit Kumar", "email": "sumit@globaltechsolutions.com", "specialization": "Endpoint Security & Firewalls", "phone": "+1-800-555-0202", "rating": 4.8, "photo": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80"},
-        {"name": "Sonam Sharma", "email": "sonam@globaltechsolutions.com", "specialization": "Software & Email Support", "phone": "+1-800-555-0203", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=400&q=80"},
-        {"name": "David Chen", "email": "david@globaltechsolutions.com", "specialization": "On-Site & Hardware Repair", "phone": "+1-800-555-0204", "rating": 4.7, "photo": "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=400&q=80"},
+        {"name": "Mike Ungaro", "email": "mike@globaltechsolutions.com", "specialization": "Microsoft Ecosystem & Enterprise Support", "phone": "+1-800-555-0200", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1560250097-0b93528c311a?w=400&q=80", "certification": "Microsoft Certified", "certification_number": "#493919583919", "level": "Level 2 Technician", "joined_year": 2014, "bio": "Mike is a Microsoft Certified, Level 2 Technician who has been with Global Tech Solutions since 2014. He specializes in Microsoft Windows, Microsoft 365, Exchange, and enterprise endpoint management."},
+        {"name": "Ravi Ojha", "email": "ravi@globaltechsolutions.com", "specialization": "Network Security & Cybersecurity", "phone": "+1-800-555-0201", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?w=400&q=80", "certification": "CompTIA Security+ & Cisco CCNA", "certification_number": "#CS-2091745", "level": "Level 3 Technician", "joined_year": 2015, "bio": "Cybersecurity and network specialist — firewalls, VPNs, and crypto wallet protection."},
+        {"name": "Sumit Kumar", "email": "sumit@globaltechsolutions.com", "specialization": "Endpoint Security & Firewalls", "phone": "+1-800-555-0202", "rating": 4.8, "photo": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80", "certification": "SonicWall SNSA & CompTIA Network+", "certification_number": "#SW-448120", "level": "Level 2 Technician", "joined_year": 2017, "bio": "SonicWall-certified specialist focused on firewalls, EDR, and endpoint hardening."},
+        {"name": "Sonam Sharma", "email": "sonam@globaltechsolutions.com", "specialization": "Software & Email Support", "phone": "+1-800-555-0203", "rating": 4.9, "photo": "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=400&q=80", "certification": "Microsoft 365 Certified: Modern Desktop Administrator", "certification_number": "#MS-7781302", "level": "Level 2 Technician", "joined_year": 2018, "bio": "Email recovery, Microsoft 365, and productivity software specialist."},
+        {"name": "David Chen", "email": "david@globaltechsolutions.com", "specialization": "On-Site & Hardware Repair", "phone": "+1-800-555-0204", "rating": 4.7, "photo": "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=400&q=80", "certification": "CompTIA A+", "certification_number": "#CA-2214098", "level": "Level 1 Technician", "joined_year": 2021, "bio": "Hardware, repairs, and on-site dispatch across the tri-state area."},
     ]
     techs = []
     for t in tech_defs:
@@ -775,11 +776,17 @@ async def seed_if_empty():
             "specialization": t["specialization"],
             "rating": t["rating"],
             "photo": t["photo"],
+            "certification": t["certification"],
+            "certification_number": t["certification_number"],
+            "level": t["level"],
+            "joined_year": t["joined_year"],
+            "bio": t["bio"],
             "created_at": now_iso(),
         }
         await db.users.insert_one(doc.copy())
         techs.append(doc)
 
+    mike = next(t for t in techs if t["name"] == "Mike Ungaro")
     ravi = next(t for t in techs if t["name"] == "Ravi Ojha")
     sumit = next(t for t in techs if t["name"] == "Sumit Kumar")
     sonam = next(t for t in techs if t["name"] == "Sonam Sharma")
@@ -797,7 +804,7 @@ async def seed_if_empty():
         "customer_since": "2017-11-02",
         "status": "Existing (VIP)",
         "active_plan": "Lifetime VIP Plan",
-        "assigned_technician_id": ravi["id"],
+        "assigned_technician_id": mike["id"],
         "payment_method": "Check on file",
         "photo": None,
         "created_at": now_iso(),
@@ -844,11 +851,11 @@ async def seed_if_empty():
                 "completed_at": h["date"] + "T16:30:00+00:00",
             })
 
-    # Upcoming appointment for Sanford
+    # Upcoming appointment for Sanford (with Mike — his dedicated advisor)
     await db.appointments.insert_one({
         "id": str(uuid.uuid4()),
         "customer_id": sandy["id"],
-        "technician_id": ravi["id"],
+        "technician_id": mike["id"],
         "service_type": "Quarterly VIP Health Check",
         "description": "Scheduled VIP quarterly review: firewall audit, device health sweep, crypto wallet security review.",
         "scheduled_date": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
@@ -864,7 +871,7 @@ async def seed_if_empty():
         "id": str(uuid.uuid4()),
         "ticket_number": f"TKT-{str(uuid.uuid4())[:8].upper()}",
         "customer_id": sandy["id"],
-        "assigned_to": ravi["id"],
+        "assigned_to": mike["id"],
         "status": "open",
         "subject": "Outlook intermittently asks for password",
         "description": "Outlook on my desktop keeps prompting for the AOL password every few hours. Happens on Wi-Fi only.",
@@ -1010,9 +1017,53 @@ async def seed_if_empty():
         {"name": "iDrive Business", "provider": "iDrive", "category": "Backup & Storage", "description": "Team cloud backup with server and VM support.", "highlights": ["5 TB","Unlimited computers","Server + VM backup"], "price_note": "Included in Business/VIP", "included_in_plans": ["Business","Lifetime VIP"], "tags": ["backup","server"]},
     ]
 
+    # ---- Software logo domains (used by frontend via clearbit) ----
+    logo_domains = {
+        "ChatGPT Plus": "openai.com",
+        "ChatGPT Team / Pro": "openai.com",
+        "Claude Pro": "anthropic.com",
+        "Google Gemini Advanced": "gemini.google.com",
+        "Microsoft Copilot Pro": "microsoft.com",
+        "Perplexity Pro": "perplexity.ai",
+        "Midjourney Standard": "midjourney.com",
+        "Runway Gen-4": "runwayml.com",
+        "ElevenLabs Creator": "elevenlabs.io",
+        "GitHub Copilot Pro": "github.com",
+        "Cursor Pro": "cursor.com",
+        "Notion AI": "notion.so",
+        "Grammarly Premium": "grammarly.com",
+        "QuickBooks Online Plus": "quickbooks.intuit.com",
+        "QuickBooks Self-Employed": "quickbooks.intuit.com",
+        "TurboTax Premier": "turbotax.intuit.com",
+        "TurboTax Business": "turbotax.intuit.com",
+        "FreshBooks Plus": "freshbooks.com",
+        "Microsoft 365 Business Standard": "microsoft.com",
+        "Google Workspace Business Standard": "workspace.google.com",
+        "Adobe Creative Cloud All Apps": "adobe.com",
+        "Canva Pro": "canva.com",
+        "Zoom Pro": "zoom.us",
+        "Slack Pro": "slack.com",
+        "Dropbox Professional": "dropbox.com",
+        "HubSpot Starter Suite": "hubspot.com",
+        "Salesforce Starter": "salesforce.com",
+        "Website Development (Tier 1)": "globaltechsolutions.com",
+        "Website Development (Tier 2)": "globaltechsolutions.com",
+        "WordPress Business Hosting": "wordpress.com",
+        "Shopify Basic": "shopify.com",
+        "Figma Professional": "figma.com",
+        "1Password Business": "1password.com",
+        "NordVPN Plus": "nordvpn.com",
+        "Bitdefender Total Security": "bitdefender.com",
+        "Malwarebytes Premium": "malwarebytes.com",
+        "SonicWall Capture Client": "sonicwall.com",
+        "Backblaze Computer Backup": "backblaze.com",
+        "iDrive Business": "idrive.com",
+    }
+
     for idx, item in enumerate(software_catalog):
         item["id"] = str(uuid.uuid4())
         item["created_at"] = now_iso()
+        item["logo_domain"] = logo_domains.get(item["name"], "globaltechsolutions.com")
         # simple icon hint for frontend
         cat_icons = {
             "AI Assistants": "Sparkles", "AI Creative": "Wand2", "AI Developer": "Code2",
@@ -1055,25 +1106,43 @@ async def seed_if_empty():
         "created_at": now_iso(), "updated_at": now_iso(),
     })
 
-    # ---- Sample software request from Sandy ----
-    sw_item = await db.software_catalog.find_one({"name": "QuickBooks Online Plus"}, {"_id": 0})
-    if sw_item:
+    # ---- Sandy's Loyalty Gift Bundle (granted by admin yesterday, not requested by customer) ----
+    gift_names = [
+        "ChatGPT Plus",
+        "Claude Pro",
+        "Microsoft 365 Business Standard",
+        "QuickBooks Online Plus",
+        "Adobe Creative Cloud All Apps",
+        "1Password Business",
+        "SonicWall Capture Client",
+        "Backblaze Computer Backup",
+        "TurboTax Premier",
+        "NordVPN Plus",
+    ]
+    gifted_at = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    for name in gift_names:
+        sw = await db.software_catalog.find_one({"name": name}, {"_id": 0})
+        if not sw:
+            continue
         await db.software_requests.insert_one({
             "id": str(uuid.uuid4()),
-            "request_number": f"SR-{str(uuid.uuid4())[:8].upper()}",
+            "request_number": f"GFT-{str(uuid.uuid4())[:8].upper()}",
             "customer_id": sandy["id"],
             "customer_name": sandy["name"],
             "customer_email": sandy["email"],
-            "software_id": sw_item["id"],
-            "software_name": sw_item["name"],
-            "software_provider": sw_item["provider"],
-            "software_category": sw_item["category"],
+            "software_id": sw["id"],
+            "software_name": sw["name"],
+            "software_provider": sw.get("provider"),
+            "software_category": sw.get("category"),
             "quantity": 1,
-            "reason": "Need QuickBooks for 2026 tax year — migrating from desktop version.",
-            "status": "approved",
-            "advisor_notes": "Approved. License key sent via encrypted email. Installation scheduled next Tuesday.",
-            "assigned_advisor_id": ravi["id"],
-            "created_at": now_iso(), "updated_at": now_iso(),
+            "reason": "",
+            "status": "delivered",
+            "is_gift": True,
+            "gifted_by": "Global Tech Solutions (Admin)",
+            "gifted_at": gifted_at,
+            "advisor_notes": "🎁 Loyalty gift for 8+ years as a Global Tech Solutions customer. License keys have been sent to your email and configured on file. Enjoy!",
+            "assigned_advisor_id": mike["id"],
+            "created_at": gifted_at, "updated_at": gifted_at,
         })
 
     logger.info("Seed complete.")

@@ -7,12 +7,11 @@ import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { Label } from '../../components/ui/label';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '../../components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
 import {
   Sparkles, Wand2, Code2, Zap, Receipt, Briefcase, Users, Globe,
-  ShieldCheck, HardDrive, Package, Search, CheckCircle2, Clock, XCircle, Send, MessageSquare
+  ShieldCheck, HardDrive, Package, Search, CheckCircle2, Clock, XCircle, Send, MessageSquare, Gift
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
@@ -28,6 +27,31 @@ const statusColors = {
 };
 const statusIcon = {
   pending: Clock, under_review: Clock, approved: CheckCircle2, delivered: CheckCircle2, denied: XCircle,
+};
+
+// Logo image component with graceful fallback to lucide icon
+const SoftwareLogo = ({ item, size = 40 }) => {
+  const [errored, setErrored] = useState(false);
+  const Icon = iconMap[item.icon] || Package;
+
+  if (errored || !item.logo_domain) {
+    return (
+      <div className="rounded-lg bg-blue-50 border border-blue-100 grid place-items-center flex-shrink-0" style={{ height: size, width: size }}>
+        <Icon className="text-[#0B3B82]" style={{ height: size * 0.55, width: size * 0.55 }} />
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg bg-white border border-slate-200 grid place-items-center flex-shrink-0 overflow-hidden" style={{ height: size, width: size }}>
+      <img
+        src={`https://www.google.com/s2/favicons?domain=${item.logo_domain}&sz=128`}
+        alt={item.name}
+        onError={() => setErrored(true)}
+        className="object-contain"
+        style={{ height: size * 0.7, width: size * 0.7 }}
+      />
+    </div>
+  );
 };
 
 export default function CustomerSoftware() {
@@ -50,22 +74,20 @@ export default function CustomerSoftware() {
     (!query || c.name.toLowerCase().includes(query.toLowerCase()) || c.description.toLowerCase().includes(query.toLowerCase()))
   );
 
+  const gifts = requests.filter(r => r.is_gift);
+  const userRequests = requests.filter(r => !r.is_gift);
+  const activeReq = (softwareId) => requests.find(r => r.software_id === softwareId && ['pending','under_review','approved','delivered'].includes(r.status));
+
   const openRequest = (item) => { setSelected(item); setReqForm({ quantity: 1, reason: '' }); };
   const submitRequest = async () => {
     try {
-      await api.post('/software-requests', {
-        software_id: selected.id,
-        quantity: parseInt(reqForm.quantity) || 1,
-        reason: reqForm.reason,
-      });
-      toast.success(`Request submitted — your advisor will follow up shortly.`);
+      await api.post('/software-requests', { software_id: selected.id, quantity: parseInt(reqForm.quantity) || 1, reason: reqForm.reason });
+      toast.success('Request submitted — your advisor will follow up shortly.');
       setSelected(null); load();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to submit request');
     }
   };
-
-  const activeReq = (softwareId) => requests.find(r => r.software_id === softwareId && ['pending','under_review','approved'].includes(r.status));
 
   return (
     <div className="space-y-6" data-testid="customer-software">
@@ -77,13 +99,50 @@ export default function CustomerSoftware() {
         </p>
       </div>
 
-      <Tabs value="catalog">
-        <TabsList>
-          <TabsTrigger value="catalog" data-testid="tab-catalog">Catalog</TabsTrigger>
-          <TabsTrigger value="requests" onClick={(e) => { e.preventDefault(); document.getElementById('my-requests')?.scrollIntoView({ behavior: 'smooth' }); }} data-testid="tab-my-requests">My requests ({requests.length})</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      {/* Loyalty gifts */}
+      {gifts.length > 0 && (
+        <Card className="border-emerald-200 bg-gradient-to-br from-emerald-50 to-white" data-testid="loyalty-gifts-section">
+          <CardContent className="p-6">
+            <div className="flex items-start justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="h-11 w-11 rounded-lg bg-emerald-100 border border-emerald-200 grid place-items-center">
+                  <Gift className="h-5 w-5 text-emerald-700" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-lg text-slate-900">Your loyalty gift bundle</h3>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Granted by Global Tech Solutions as a thank-you for your continued trust · delivered {gifts[0]?.gifted_at ? new Date(gifts[0].gifted_at).toLocaleDateString() : 'recently'}.
+                  </p>
+                </div>
+              </div>
+              <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">{gifts.length} subscriptions included</Badge>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {gifts.map(g => {
+                const sw = catalog.find(c => c.id === g.software_id);
+                const display = sw || { name: g.software_name, icon: 'Package', logo_domain: null, category: g.software_category };
+                return (
+                  <div key={g.id} className="rounded-lg border border-emerald-200 bg-white p-3 flex items-center gap-3" data-testid={`gift-${g.id}`}>
+                    <SoftwareLogo item={display} size={38} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-slate-900 truncate">{g.software_name}</div>
+                      <div className="text-[11px] text-slate-500 truncate">{g.software_provider}</div>
+                    </div>
+                    <Gift className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                  </div>
+                );
+              })}
+            </div>
+            {gifts[0]?.advisor_notes && (
+              <p className="mt-5 text-sm text-slate-700 p-3 rounded-md bg-white border border-emerald-200 italic">
+                {gifts[0].advisor_notes}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
+      {/* Filter bar */}
       <Card className="border-slate-200">
         <CardContent className="p-5">
           <div className="flex flex-wrap gap-3 items-center">
@@ -111,19 +170,15 @@ export default function CustomerSoftware() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {filtered.map(item => {
-          const Icon = iconMap[item.icon] || Package;
           const req = activeReq(item.id);
+          const isGifted = req?.is_gift;
           return (
             <Card key={item.id} className="border-slate-200 gts-card-hover flex flex-col" data-testid={`software-${item.name.toLowerCase().replace(/\s/g,'-')}`}>
               <CardContent className="p-5 flex flex-col flex-1">
                 <div className="flex items-start gap-3">
-                  <div className="h-10 w-10 rounded-lg bg-blue-50 border border-blue-100 grid place-items-center flex-shrink-0">
-                    <Icon className="h-5 w-5 text-[#0B3B82]" />
-                  </div>
+                  <SoftwareLogo item={item} size={44} />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-display font-semibold text-slate-900 truncate">{item.name}</h3>
-                    </div>
+                    <h3 className="font-display font-semibold text-slate-900 leading-tight">{item.name}</h3>
                     <div className="text-xs text-slate-500 mt-0.5">{item.provider}</div>
                   </div>
                 </div>
@@ -138,7 +193,9 @@ export default function CustomerSoftware() {
                 </ul>
                 <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
                   <div className="text-xs text-slate-500 flex-1">{item.price_note}</div>
-                  {req ? (
+                  {isGifted ? (
+                    <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200"><Gift className="h-3 w-3 mr-1" /> Gifted</Badge>
+                  ) : req ? (
                     <Badge className={statusColors[req.status]}>
                       {React.createElement(statusIcon[req.status], { className: 'h-3 w-3 mr-1' })}
                       {req.status.replace('_', ' ')}
@@ -155,41 +212,41 @@ export default function CustomerSoftware() {
         })}
       </div>
 
-      {/* My requests */}
+      {/* My requests — only shows non-gift requests */}
       <Card className="border-slate-200" id="my-requests">
         <CardContent className="p-6">
           <h3 className="font-display font-bold text-xl">My software requests</h3>
           <div className="mt-4 space-y-3">
-            {requests.map(r => {
+            {userRequests.map(r => {
               const StatusIcon = statusIcon[r.status] || Clock;
+              const sw = catalog.find(c => c.id === r.software_id);
               return (
-                <div key={r.id} className="p-4 rounded-lg border border-slate-200 bg-white" data-testid={`my-request-${r.id}`}>
-                  <div className="flex justify-between items-start flex-wrap gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs text-slate-500">{r.request_number}</span>
-                        <Badge variant="outline" className="text-[10px]">{r.software_category}</Badge>
-                      </div>
-                      <div className="font-display font-semibold text-slate-900 mt-1">{r.software_name}</div>
-                      <div className="text-xs text-slate-500">{r.software_provider} · Qty: {r.quantity}</div>
-                      {r.reason && <p className="text-sm text-slate-600 mt-2 italic">"{r.reason}"</p>}
-                      {r.advisor_notes && (
-                        <div className="mt-2 p-2 rounded bg-blue-50 border border-blue-100 text-xs text-slate-700">
-                          <strong>Advisor note:</strong> {r.advisor_notes}
-                        </div>
-                      )}
+                <div key={r.id} className="p-4 rounded-lg border border-slate-200 bg-white flex gap-4" data-testid={`my-request-${r.id}`}>
+                  <SoftwareLogo item={sw || { name: r.software_name, icon: 'Package' }} size={40} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs text-slate-500">{r.request_number}</span>
+                      <Badge variant="outline" className="text-[10px]">{r.software_category}</Badge>
                     </div>
-                    <Badge className={statusColors[r.status]}>
-                      <StatusIcon className="h-3 w-3 mr-1" />
-                      {r.status.replace('_', ' ')}
-                    </Badge>
+                    <div className="font-display font-semibold text-slate-900 mt-1">{r.software_name}</div>
+                    <div className="text-xs text-slate-500">{r.software_provider} · Qty: {r.quantity}</div>
+                    {r.reason && <p className="text-sm text-slate-600 mt-2 italic">"{r.reason}"</p>}
+                    {r.advisor_notes && (
+                      <div className="mt-2 p-2 rounded bg-blue-50 border border-blue-100 text-xs text-slate-700">
+                        <strong>Advisor note:</strong> {r.advisor_notes}
+                      </div>
+                    )}
                   </div>
+                  <Badge className={statusColors[r.status]}>
+                    <StatusIcon className="h-3 w-3 mr-1" />
+                    {r.status.replace('_', ' ')}
+                  </Badge>
                 </div>
               );
             })}
-            {requests.length === 0 && (
+            {userRequests.length === 0 && (
               <p className="text-sm text-slate-500 text-center py-6">
-                You haven't requested any software yet. Browse the catalog above and click <strong>Request</strong>.
+                You haven't requested any software yet. Browse the catalog above and click <strong>Request</strong> on any item.
               </p>
             )}
           </div>
@@ -214,10 +271,15 @@ export default function CustomerSoftware() {
               <DialogHeader>
                 <DialogTitle>Request {selected.name}</DialogTitle>
               </DialogHeader>
-              <div className="text-sm text-slate-600">
-                <p>{selected.description}</p>
-                <p className="mt-2 text-xs text-slate-500">{selected.price_note}</p>
+              <div className="flex items-center gap-3 text-sm text-slate-600">
+                <SoftwareLogo item={selected} size={48} />
+                <div>
+                  <div className="font-semibold text-slate-900">{selected.name}</div>
+                  <div className="text-xs text-slate-500">{selected.provider}</div>
+                </div>
               </div>
+              <p className="text-sm text-slate-600">{selected.description}</p>
+              <p className="text-xs text-slate-500">{selected.price_note}</p>
               <div className="space-y-3 mt-2">
                 <div><Label>Quantity / seats</Label><Input type="number" min="1" value={reqForm.quantity} onChange={e => setReqForm({ ...reqForm, quantity: e.target.value })} className="mt-1.5" data-testid="request-quantity" /></div>
                 <div><Label>Why do you need it? (optional)</Label><Textarea rows={3} value={reqForm.reason} onChange={e => setReqForm({ ...reqForm, reason: e.target.value })} placeholder="e.g., Need for 2026 tax year" className="mt-1.5" data-testid="request-reason" /></div>

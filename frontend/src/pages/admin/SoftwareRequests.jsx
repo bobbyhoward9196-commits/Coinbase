@@ -61,8 +61,13 @@ export default function AdminSoftwareRequests() {
                     <div className="text-xs text-slate-500">{r.customer_email}</div>
                   </TableCell>
                   <TableCell>
-                    <div className="font-medium">{r.software_name}</div>
-                    <div className="text-xs text-slate-500">{r.software_category}</div>
+                    <div className="flex items-center gap-2">
+                      {r.is_gift && <span title="Loyalty gift" className="text-emerald-600">🎁</span>}
+                      <div>
+                        <div className="font-medium">{r.software_name}</div>
+                        <div className="text-xs text-slate-500">{r.software_category}</div>
+                      </div>
+                    </div>
                   </TableCell>
                   <TableCell>{r.quantity}</TableCell>
                   <TableCell>{t?.name || '—'}</TableCell>
