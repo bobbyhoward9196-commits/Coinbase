@@ -20,12 +20,13 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '../../components/ui/select';
 import {
-  Calendar, CreditCard, Star, Phone, Mail, Plus, Download, Send, MessageSquare, Shield, ClipboardList, TicketCheck,
+  Calendar, CreditCard, Star, Phone, Mail, Plus, Download, Send, MessageSquare, Shield, ClipboardList, TicketCheck, FileWarning, ShieldAlert,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Software from './Software';
 import Devices from './Devices';
 import ActiveServices from './ActiveServices';
+import DiagnosticReports from './DiagnosticReports';
 import ScanEmbed from '../Scan';
 
 const ScanRoute = () => <ScanEmbed embedded />;
@@ -63,6 +64,7 @@ const Overview = () => {
   const [invoices, setInvoices] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [customer, setCustomer] = useState(null);
+  const [reports, setReports] = useState([]);
 
   useEffect(() => {
     Promise.all([
@@ -71,12 +73,14 @@ const Overview = () => {
       api.get('/invoices'),
       api.get('/tickets'),
       api.get(`/customers/${user.id}`),
-    ]).then(([s, a, i, t, c]) => {
-      setStats(s.data); setAppts(a.data); setInvoices(i.data); setTickets(t.data); setCustomer(c.data);
+      api.get('/diagnostic-reports'),
+    ]).then(([s, a, i, t, c, r]) => {
+      setStats(s.data); setAppts(a.data); setInvoices(i.data); setTickets(t.data); setCustomer(c.data); setReports(r.data);
     });
   }, [user.id]);
 
   const tech = customer?.technician;
+  const latestReport = reports[0];
 
   return (
     <div className="space-y-6" data-testid="customer-overview">
@@ -84,6 +88,29 @@ const Overview = () => {
         <h2 className="font-display font-bold text-2xl text-slate-900">Welcome back, {user.name.split(' ')[0]}.</h2>
         <p className="text-slate-600 text-sm mt-1">Here's what's happening with your support account.</p>
       </div>
+
+      {/* Diagnostic report alert (only when a report exists) */}
+      {latestReport && (
+        <Card className="border-amber-200 bg-gradient-to-r from-amber-50 via-rose-50/40 to-white" data-testid="overview-report-callout">
+          <CardContent className="p-5">
+            <div className="flex items-start gap-4">
+              <div className="h-10 w-10 rounded-lg bg-amber-100 border border-amber-200 grid place-items-center shrink-0">
+                <ShieldAlert className="h-5 w-5 text-amber-700" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-slate-900">New diagnostic report available</span>
+                  <Badge className="bg-green-600 hover:bg-green-600 text-white text-[10px]">Remediated</Badge>
+                </div>
+                <p className="text-sm text-slate-600 mt-0.5 line-clamp-2">{latestReport.title}</p>
+              </div>
+              <Button asChild className="bg-[#0B3B82] hover:bg-[#0a3270] shrink-0" data-testid="overview-view-reports-btn">
+                <Link to="/dashboard/reports"><FileWarning className="h-4 w-4 mr-1.5" />View report</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard icon={Calendar} label="Upcoming" value={stats.upcoming_appointments ?? 0} hint="Scheduled appointments" />
@@ -548,6 +575,7 @@ export default function CustomerDashboard() {
         <Route path="appointments" element={<Appointments />} />
         <Route path="software" element={<Software />} />
         <Route path="active" element={<ActiveServices />} />
+        <Route path="reports" element={<DiagnosticReports />} />
         <Route path="devices" element={<Devices />} />
         <Route path="scan" element={<ScanRoute />} />
         <Route path="invoices" element={<Invoices />} />

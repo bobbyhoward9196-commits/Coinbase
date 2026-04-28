@@ -53,10 +53,20 @@ Real customer: Sanford Burstein (since Nov 2017) with full 7-year service/paymen
 - Seeded Sanford with 2 devices (Dell OptiPlex, Lenovo ThinkPad) + 1 approved QuickBooks request
 - ✅ Backend test: 29/29 passed
 
-### Iteration 3 — 2FA / OTP Login (Apr 2026) — REVERTED per user request
-- Feature was built, tested (15/15 backend, 6/6 frontend), and deployed with verified Resend domain.
-- User opted to remove it — customer login is back to direct JWT (same as admin/tech).
-- Resend integration & auth_otps collection removed. Login works with a single `{email, password, role?}` call.
+### Iteration 4 — Diagnostic & Remediation Reports (Apr 2026)
+- New `diagnostic_reports` MongoDB collection storing report metadata + relative file path
+- Real 4-page branded PDF generated via reportlab (`/app/backend/diagnostic_report.py`)
+  - Page 1: Cover + executive summary table (severity HIGH, status REMEDIATED)
+  - Page 2: Findings inventory table (SSN/email/banking exposure) + threat-flow diagram
+  - Page 3: 8-action remediation table (server destroyed, FBI/FTC/SSA notified, bureaus frozen, EDR redeployed, Microsoft node, dark-web monitoring rebaselined)
+  - Page 4: Microsoft secure-node architecture diagram + plain-English explanation + sign-off block
+- Backend endpoints: `GET /api/diagnostic-reports` (list), `GET /api/diagnostic-reports/{id}/download` (auth-gated PDF stream, regenerates on disk-miss)
+- PDF auto-seeded for Sanford on backend startup (idempotent)
+- Frontend:
+  - New sidebar entry "Diagnostic Reports" (FileWarning icon)
+  - New page `/dashboard/reports` with severity/status badges + branded download card
+  - Top-of-overview alert callout with "View report" CTA whenever any report exists
+- ✅ Customer overview & reports page rendered cleanly via screenshot test
 
 ## Backlog / Not yet
 - P1: File upload for technician reports (object storage)

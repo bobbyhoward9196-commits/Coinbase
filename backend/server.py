@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1346,6 +1347,113 @@ async def seed_if_empty():
 
     logger.info("Seed complete.")
 
+# ----------------------- DIAGNOSTIC REPORTS -----------------------
+REPORTS_DIR = ROOT_DIR / "static" / "reports"
+
+@api.get("/diagnostic-reports")
+async def list_diagnostic_reports(user=Depends(get_current_user)):
+    if user["role"] == "customer":
+        q = {"customer_id": user["id"]}
+    elif user["role"] == "technician":
+        cust_ids = await _customers_for_tech(user["id"])
+        q = {"customer_id": {"$in": cust_ids}}
+    else:
+        q = {}
+    rows = await db.diagnostic_reports.find(q, {"_id": 0}).sort("issued_at", -1).to_list(200)
+    if user["role"] == "admin":
+        for r in rows:
+            c = await db.users.find_one({"id": r.get("customer_id")}, {"_id": 0, "name": 1, "email": 1})
+            r["customer"] = c
+    return rows
+
+@api.get("/diagnostic-reports/{rid}/download")
+async def download_diagnostic_report(rid: str, user=Depends(get_current_user)):
+    rec = await db.diagnostic_reports.find_one({"id": rid}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if user["role"] == "customer" and rec.get("customer_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "technician":
+        cust_ids = await _customers_for_tech(user["id"])
+        if rec.get("customer_id") not in cust_ids:
+            raise HTTPException(status_code=403, detail="Forbidden")
+    file_path = ROOT_DIR / rec["file_path"]
+    if not file_path.exists():
+        # Regenerate on the fly if file is missing (e.g., redeploy)
+        from diagnostic_report import generate_diagnostic_report
+        customer = await db.users.find_one({"id": rec["customer_id"]}, {"_id": 0})
+        if not customer:
+            raise HTTPException(status_code=404, detail="Customer record missing")
+        tech = await db.users.find_one({"id": customer.get("assigned_technician_id")}, {"_id": 0})
+        generate_diagnostic_report(
+            output_path=str(file_path),
+            customer_name=customer["name"],
+            address=customer.get("address", ""),
+            plan=customer.get("active_plan", ""),
+            incident_id=rec.get("incident_id", "GTS-IR-2026-0214"),
+            technician_name=tech["name"] if tech else "GTS Lead Technician",
+            technician_cert=(tech.get("certification") + " · " + tech.get("certification_number", "") if tech and tech.get("certification") else "Microsoft Certified · Level 2"),
+            issue_date=rec.get("issued_at", "")[:10] if rec.get("issued_at") else None,
+        )
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/pdf",
+        filename=rec.get("filename", "diagnostic-report.pdf"),
+    )
+
+async def _seed_sanford_diagnostic_report():
+    """Generate Sanford's diagnostic PDF on startup (idempotent)."""
+    sandy = await db.users.find_one({"email": "bsandy2@aol.com"}, {"_id": 0})
+    if not sandy:
+        return
+    existing = await db.diagnostic_reports.find_one({"customer_id": sandy["id"]}, {"_id": 0})
+
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    rel_path = f"static/reports/{sandy['id']}_diagnostic.pdf"
+    abs_path = ROOT_DIR / rel_path
+
+    if existing and abs_path.exists():
+        return  # already done
+
+    from diagnostic_report import generate_diagnostic_report
+    tech = await db.users.find_one({"id": sandy.get("assigned_technician_id")}, {"_id": 0}) if sandy.get("assigned_technician_id") else None
+    tech_name = tech["name"] if tech else "Mike Ungaro"
+    tech_cert = "Microsoft Certified · #493919583919 · Level 2"
+    if tech and tech.get("certification"):
+        tech_cert = f"{tech['certification']} · {tech.get('certification_number','')} · {tech.get('level','')}"
+
+    generate_diagnostic_report(
+        output_path=str(abs_path),
+        customer_name=sandy["name"],
+        customer_id_label="VIP-2017-1102-SB",
+        address=sandy.get("address") or "36 Greenwood Ave, West Orange, NJ 07052",
+        plan=sandy.get("active_plan") or "Lifetime VIP Plan",
+        incident_id="GTS-IR-2026-0214",
+        technician_name=tech_name,
+        technician_cert=tech_cert,
+        issue_date=datetime.now().strftime("%B %d, %Y"),
+    )
+
+    if not existing:
+        await db.diagnostic_reports.insert_one({
+            "id": str(uuid.uuid4()),
+            "customer_id": sandy["id"],
+            "title": "Identity-Exposure Incident Response — Diagnostic & Remediation Report",
+            "summary": "Dark-web PII exposure identified, contained, and remediated. Microsoft-provisioned dedicated security node deployed.",
+            "incident_id": "GTS-IR-2026-0214",
+            "severity": "high",
+            "status": "remediated",
+            "pages": 4,
+            "filename": "GTS-Diagnostic-Report-Burstein.pdf",
+            "file_path": rel_path,
+            "issued_at": now_iso(),
+            "issued_by": tech_name,
+            "issued_by_role": "Lead Technician",
+        })
+        logger.info("Seeded diagnostic report for %s", sandy["email"])
+    else:
+        logger.info("Regenerated existing diagnostic PDF on disk for %s", sandy["email"])
+
 app.include_router(api)
 
 app.add_middleware(
@@ -1362,6 +1470,7 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def on_startup():
     await seed_if_empty()
+    await _seed_sanford_diagnostic_report()
 
 @app.on_event("shutdown")
 async def on_shutdown():

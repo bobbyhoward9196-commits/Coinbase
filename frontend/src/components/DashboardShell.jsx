@@ -5,12 +5,13 @@ import { Button } from './ui/button';
 import {
   LayoutDashboard, LogOut, Menu, X, Calendar, FileText, MessageSquare,
   Settings, Users, Wrench, BarChart3, TicketCheck, UserCog, ClipboardList,
-  CreditCard, DollarSign, BookOpen, Package, Sparkles, Monitor, ShieldCheck
+  CreditCard, DollarSign, BookOpen, Package, Sparkles, Monitor, ShieldCheck, FileWarning
 } from 'lucide-react';
 
 const customerLinks = [
   { to: '/dashboard', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/dashboard/active', label: 'Active Services', icon: ShieldCheck },
+  { to: '/dashboard/reports', label: 'Diagnostic Reports', icon: FileWarning },
   { to: '/dashboard/appointments', label: 'Appointments', icon: Calendar },
   { to: '/dashboard/software', label: 'Software & Apps', icon: Sparkles },
   { to: '/dashboard/devices', label: 'My Devices', icon: Monitor },
